@@ -1,0 +1,30 @@
+
+
+
+from flask import Flask, jsonify, request
+from sync_company_data import sync_company_data
+
+app = Flask(__name__)
+
+
+@app.route("/webhook", methods=["POST"])
+def handle_webhook():
+    print("🔔 Notionから更新リクエストを受信しました！")
+    try:
+        # 同期処理を実行
+        sync_company_data()
+        return (
+            jsonify(
+                {"status": "success", "message": "Sync completed successfully"}
+            ),
+            200,
+        )
+    except Exception as e:
+        print(f"❌ エラーが発生しました: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+if __name__ == "__main__":
+    # ポート5000でサーバーを起動
+    print("📡 受信サーバーを起動中... (Port: 5000)")
+    app.run(port=5000)

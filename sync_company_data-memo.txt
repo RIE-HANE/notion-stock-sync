@@ -1,0 +1,124 @@
+① 2つの処理（コード検索＋株価更新）を1つのスクリプトに合体
+
+1回コマンドを打つだけで「新しく追加した企業のコード補完」から「最新株価の更新」まで全自動で一括実行できるようにします。
+
+---------------------
+import re
+from urllib.parse import quote
+from bs4 import BeautifulSoup
+from notion_client import Client
+import requests
+import yfinance as yf
+
+# 1. アクセストークンとデータベースID
+NOTION_TOKEN = "ntn_nX464811020bEJSuYhIeUadAjlQmTXDNm6ZqjK20riQ1Hf"
+DATABASE_ID = "3d801bb4740c8025b1a8efc2cf1d1595"
+
+notion = Client(auth=NOTION_TOKEN)
+
+
+def search_ticker_from_yahoo(company_name):
+    """Yahoo!ファイナンスで企業名を検索し、証券コード（文字列）を取得"""
+    try:
+        encoded_name = quote(company_name)
+        url = f"https://finance.yahoo.co.jp/search/?query={encoded_name}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+
+        res = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(res.text, "html.parser")
+
+        # ページのリンク構造から証券コードを抽出
+        for a_tag in soup.find_all("a", href=True):
+            href = a_tag["href"]
+            match = re.search(r"/quote/(\d{4})", href)
+            if match:
+                return match.group(1)
+    except Exception as e:
+        print(f"  └ 検索エラー ({company_name}): {e}")
+
+    return None
+
+
+def get_stock_price(code_str):
+    """証券コード（文字列）からYahoo Financeの株価を取得"""
+    try:
+        ticker_symbol = f"{code_str.strip()}.T"
+        ticker = yf.Ticker(ticker_symbol)
+        todays_data = ticker.history(period="1d")
+
+        if not todays_data.empty:
+            price = round(todays_data["Close"].iloc[-1], 2)
+            return price
+    except Exception as e:
+        print(f"  └ 株価取得失敗 ({code_str}): {e}")
+    return None
+
+
+def sync_company_data():
+    print("🚀 企業データの一括同期処理を開始します...\n")
+
+    # Notionから企業リストを取得
+    response = notion.search(filter={"value": "page", "property": "object"})
+    results = response.get("results", [])
+
+    db_pages = [
+        page
+        for page in results
+        if page.get("parent", {}).get("database_id", "").replace("-", "")
+        == DATABASE_ID
+    ]
+
+    for page in db_pages:
+        page_id = page["id"]
+        properties = page.get("properties", {})
+
+        # 1. 企業名の取得
+        title_prop = properties.get("名前", {}).get("title", [])
+        if not title_prop:
+            continue
+        company_name = title_prop[0].get("text", {}).get("content", "").strip()
+
+        # 2. 証券コードの確認と自動取得
+        code_prop = properties.get("証券コード", {}).get("rich_text", [])
+        ticker_code = None
+
+        if code_prop:
+            ticker_code = code_prop[0].get("text", {}).get("content", "").strip()
+
+        if not ticker_code:
+            print(f"🔍 {company_name}: 証券コードを検索中...")
+            ticker_code = search_ticker_from_yahoo(company_name)
+
+            if ticker_code:
+                # Notionの証券コードを更新
+                notion.pages.update(
+                    page_id=page_id,
+                    properties={
+                        "証券コード": {
+                            "rich_text": [{"text": {"content": str(ticker_code)}}]
+                        }
+                    },
+                )
+                print(f"  └ 証券コード: {ticker_code} を自動入力しました")
+            else:
+                print(f"  └ 証券コードが見つかりませんでした（未上場等）")
+                continue
+
+        # 3. 株価を取得して更新
+        price = get_stock_price(ticker_code)
+
+        if price is not None:
+            notion.pages.update(
+                page_id=page_id, properties={"株価": {"number": price}}
+            )
+            print(f"✅ {company_name} ({ticker_code}): {price} 円 に更新完了")
+        else:
+            print(f"⚠️ {company_name} ({ticker_code}): 株価取得失敗")
+
+    print("\n🎉 すべての同期処理が完了しました！")
+
+
+if __name__ == "__main__":
+    sync_company_data()
