@@ -169,16 +169,17 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     plt.close()
 
 def sync_pending_images_to_notion(tasks):
-    # エラー防止のため正確な GitHub Raw URL を作成
+    now_ts = int(time.time())
     for task in tasks:
         page_id = task['page_id']
         chart_list = task['chart_list']
         
         children_blocks = []
         for item in chart_list:
-            # パスから images/ を重複させず綺麗に取得
             filename = os.path.basename(item['rel_path'])
-            raw_image_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/images/{filename}"
+            # cdn.jsdelivr.net を使ってRawのキャッシュ問題を回避
+            image_url = f"https://cdn.jsdelivr.net/gh/{GITHUB_REPOSITORY}@main/images/{filename}?v={now_ts}"
+            print(f"送信中の画像URL: {image_url}")
             
             children_blocks.append({
                 "object": "block",
@@ -192,7 +193,7 @@ def sync_pending_images_to_notion(tasks):
                 "type": "image",
                 "image": {
                     "type": "external",
-                    "external": {"url": raw_image_url}
+                    "external": {"url": image_url}
                 }
             })
 
