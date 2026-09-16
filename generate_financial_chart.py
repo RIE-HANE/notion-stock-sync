@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 EDINET_API_KEY = os.environ.get("EDINET_API_KEY")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
+GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "RIE-HANE/notion-stock-sync")
 
 def get_notion_pages():
     """Notionから企業一覧を取得"""
@@ -53,23 +54,39 @@ def get_notion_pages():
         
     return pages
 
+def is_already_processed(page_id):
+    """Notionページ内にすでに画像・グラフが存在するか判定"""
+    url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Notion-Version": "2022-06-28"
+    }
+    res = requests.get(url, headers=headers)
+    if res.status_code == 200:
+        blocks = res.json().get("results", [])
+        for block in blocks:
+            # 画像ブロック、またはテキスト内に「財務構造」が含まれているか判定
+            if block.get("type") == "image":
+                return True
+            if block.get("type") == "paragraph":
+                rich_text = block.get("paragraph", {}).get("rich_text", [])
+                for text_obj in rich_text:
+                    if "財務構造" in text_obj.get("plain_text", ""):
+                        return True
+    return False
+
 def search_edinet_doc_id(ticker):
-    """銘柄コードから有価証券報告書(docID)を検索（6月集中日などをカバー）"""
+    """銘柄コードから有価証券報告書(docID)を検索"""
     if not ticker or str(ticker) == "None":
         return None
     
     target_code = str(ticker).strip()[:4]
     today = datetime.now()
 
-    # 有価証券報告書が提出されやすい主要な時期（過去365日の中の特定日＋直近30日）をスキャン
-    # 6月下旬（20日〜30日）、3月下旬（20日〜31日）などを重点検索
     search_dates = []
-    
-    # 1. 直近14日間
     for i in range(14):
         search_dates.append((today - timedelta(days=i)).strftime("%Y-%m-%d"))
         
-    # 2. 過去1年間の主要決算報告月（6月・3月・9月・12月の下旬）
     current_year = today.year
     for year in [current_year, current_year - 1]:
         for month in [6, 3, 9, 12]:
@@ -94,7 +111,6 @@ def search_edinet_doc_id(ticker):
                 results = res.json().get("results", [])
                 for doc in results:
                     sec_code = str(doc.get("secCode", "")).strip()[:4]
-                    # docTypeCode: "120" は有価証券報告書
                     if sec_code == target_code and doc.get("docTypeCode") == "120":
                         return doc.get("docID")
         except Exception:
@@ -157,7 +173,10 @@ def create_financial_chart(company_name, financial_data, output_path="chart.png"
     plt.close()
 
 def upload_chart_to_notion(page_id, file_path):
-    """Notionページの本文へ画像通知を追加"""
+    """GitHub Raw URLを参照してNotion内に『画像ブロック』を埋め込み"""
+    # GitHub上の画像Raw URL
+    raw_image_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{file_path}"
+    
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -168,23 +187,28 @@ def upload_chart_to_notion(page_id, file_path):
         "children": [
             {
                 "object": "block",
-                "type": "paragraph",
-                "paragraph": {
-                    "rich_text": [
-                        {
-                            "type": "text",
-                            "text": {"content": f"📊 財務構造グラフ生成完了 ({datetime.now().strftime('%Y-%m-%d')})"}
-                        }
-                    ]
+                "type": "heading_3",
+                "heading_3": {
+                    "rich_text": [{"type": "text", "text": {"content": "📊 財務構造グラフ (BS / PL)"}}]
+                }
+            },
+            {
+                "object": "block",
+                "type": "image",
+                "image": {
+                    "type": "external",
+                    "external": {
+                        "url": raw_image_url
+                    }
                 }
             }
         ]
     }
     res = requests.patch(url, headers=headers, json=payload)
     if res.status_code == 200:
-        print(f"Notionページへの書き込み成功: {page_id}")
+        print(f"Notionページへ画像埋め込み成功: {page_id}")
     else:
-        print(f"Notion書き込みエラー: {res.text}")
+        print(f"Notion画像埋め込みエラー: {res.text}")
 
 if __name__ == "__main__":
     print("Notionから企業一覧を取得中...")
@@ -197,6 +221,11 @@ if __name__ == "__main__":
         page_id = comp.get("page_id")
         print(f"\n--- 処理開始: {name} (コード: {ticker}) ---")
         
+        # 既にNotion内にグラフ生成済みのログ・画像があるか判定
+        if is_already_processed(page_id):
+            print("すでにグラフが存在するためスキップします。")
+            continue
+
         doc_id = search_edinet_doc_id(ticker)
         if doc_id:
             print(f"EDINET有価証券報告書を発見 (DocID: {doc_id})")
