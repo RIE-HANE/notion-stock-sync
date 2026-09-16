@@ -1,12 +1,9 @@
 import os
-import io
-import zipfile
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import japanize_matplotlib
-from bs4 import BeautifulSoup
 
 # 環境変数
 EDINET_API_KEY = os.environ.get("EDINET_API_KEY")
@@ -15,7 +12,7 @@ DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "RIE-HANE/notion-stock-sync")
 
 def get_notion_pages():
-    """Notionから企業一覧を取得"""
+    """Notionから企業一覧と「過去3年分作成」チェック状態を取得"""
     url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -34,6 +31,7 @@ def get_notion_pages():
         props = page.get("properties", {})
         name = "不明"
         ticker = None
+        target_3years = False
 
         for prop_name, prop_val in props.items():
             if prop_val.get("type") == "title":
@@ -49,51 +47,58 @@ def get_notion_pages():
                         ticker = txt_arr[0].get("plain_text")
                 elif p_type == "number":
                     ticker = str(prop_val.get("number"))
+            
+            if prop_val.get("type") == "checkbox" and ("3年" in prop_name or "過去" in prop_name):
+                target_3years = prop_val.get("checkbox", False)
 
-        pages.append({"page_id": page["id"], "name": name, "ticker": ticker})
+        pages.append({
+            "page_id": page["id"], 
+            "name": name, 
+            "ticker": ticker, 
+            "target_3years": target_3years
+        })
         
     return pages
 
-def has_image_already(page_id):
-    """Notionページ内にすでに『画像ブロック(image)』が存在するか厳密判定"""
+def get_existing_notion_years(page_id):
+    """Notionページ内にすでに存在する「年度(2023, 2024, 2025等)」を取得"""
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
         "Notion-Version": "2022-06-28"
     }
     res = requests.get(url, headers=headers)
+    existing_years = set()
+    
     if res.status_code == 200:
         blocks = res.json().get("results", [])
         for block in blocks:
-            # 純粋に画像ブロックが存在する場合のみTrueを返す
-            if block.get("type") == "image":
-                return True
-    return False
+            # テキストブロックの中から「20XX年度」の年番号を探す
+            b_type = block.get("type")
+            if b_type in ["paragraph", "heading_1", "heading_2", "heading_3"]:
+                txts = block.get(b_type, {}).get("rich_text", [])
+                for t in txts:
+                    content = t.get("plain_text", "")
+                    for yr in range(2020, 2035):
+                        if f"{yr}年度" in content:
+                            existing_years.add(yr)
+    return existing_years
 
-def search_edinet_doc_id(ticker):
-    """銘柄コードから有価証券報告書(docID)を検索"""
+def search_edinet_doc_by_year(ticker, target_year):
+    """指定年度の有価証券報告書(120)を検索"""
     if not ticker or str(ticker) == "None":
         return None
     
     target_code = str(ticker).strip()[:4]
     today = datetime.now()
-
-    search_dates = []
-    for i in range(14):
-        search_dates.append((today - timedelta(days=i)).strftime("%Y-%m-%d"))
-        
-    current_year = today.year
-    for year in [current_year, current_year - 1]:
-        for month in [6, 3, 9, 12]:
-            for day in range(20, 31):
-                try:
-                    d_str = f"{year}-{month:02d}-{day:02d}"
-                    if d_str not in search_dates and d_str <= today.strftime("%Y-%m-%d"):
-                        search_dates.append(d_str)
-                except ValueError:
-                    continue
-
+    
+    # 有報が提出される6月・3月の提出日を検索
+    search_dates = [f"{target_year}-06-{day:02d}" for day in range(20, 31)]
+    search_dates += [f"{target_year}-03-{day:02d}" for day in range(20, 31)]
+    
     for check_date in search_dates:
+        if check_date > today.strftime("%Y-%m-%d"):
+            continue
         url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
         params = {
             "date": check_date,
@@ -107,14 +112,13 @@ def search_edinet_doc_id(ticker):
                 for doc in results:
                     sec_code = str(doc.get("secCode", "")).strip()[:4]
                     if sec_code == target_code and doc.get("docTypeCode") == "120":
-                        return doc.get("docID")
+                        return {"year": target_year, "doc_id": doc.get("docID")}
         except Exception:
             continue
-            
     return None
 
 def fetch_xbrl_financial_data(doc_id):
-    """EDINET APIからXBRLを取得"""
+    """EDINET APIから財務データを取得（サンプル構造）"""
     if not doc_id:
         return None
 
@@ -137,8 +141,8 @@ def fetch_xbrl_financial_data(doc_id):
 
     return None
 
-def create_financial_chart(company_name, financial_data, output_path="chart.png"):
-    """BS/PL図解画像を生成"""
+def create_financial_chart(company_name, year_label, financial_data, output_path):
+    """BS/PL図解画像をローカルに保存"""
     fig, ax = plt.subplots(figsize=(10, 8))
     
     total_assets = financial_data.get("total_assets", 1000) or 1000
@@ -163,74 +167,94 @@ def create_financial_chart(company_name, financial_data, output_path="chart.png"
     ax.set_xlim(0, 100)
     ax.set_ylim(-10, 110)
     plt.axis('off')
-    plt.title(f"{company_name} 財務構造分析図 (BS / PL)", fontsize=16)
+    plt.title(f"{company_name} ({year_label}) 財務構造分析図", fontsize=16)
+    
+    # imagesフォルダが存在しない場合は作成
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     plt.savefig(output_path, bbox_inches='tight', dpi=200)
     plt.close()
 
-def upload_chart_to_notion(page_id, file_path):
-    """GitHub Raw URLを参照してNotion内に『画像ブロック』を埋め込み"""
-    raw_image_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{file_path}"
-    
+def upload_charts_to_notion(page_id, chart_list):
+    """Notionに「年度付きの見出し」と「画像URL」を追加"""
+    children_blocks = []
+
+    for item in chart_list:
+        raw_image_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{item['rel_path']}"
+        children_blocks.append({
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": f"🔻 {item['year']}年度 財務構造 (BS/PL)"}}]
+            }
+        })
+        children_blocks.append({
+            "object": "block",
+            "type": "image",
+            "image": {
+                "type": "external",
+                "external": {"url": raw_image_url}
+            }
+        })
+
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
         "Notion-Version": "2022-06-28",
         "Content-Type": "application/json"
     }
-    payload = {
-        "children": [
-            {
-                "object": "block",
-                "type": "heading_3",
-                "heading_3": {
-                    "rich_text": [{"type": "text", "text": {"content": "📊 財務構造グラフ (BS / PL)"}}]
-                }
-            },
-            {
-                "object": "block",
-                "type": "image",
-                "image": {
-                    "type": "external",
-                    "external": {
-                        "url": raw_image_url
-                    }
-                }
-            }
-        ]
-    }
+    payload = {"children": children_blocks}
     res = requests.patch(url, headers=headers, json=payload)
     if res.status_code == 200:
-        print(f"Notionページへ画像埋め込み成功: {page_id}")
+        print(f"Notionへ {len(chart_list)}枚 の画像ブロックを追加しました。")
     else:
-        print(f"Notion画像埋め込みエラー: {res.text}")
+        print(f"Notion画像追加エラー: {res.text}")
 
 if __name__ == "__main__":
     print("Notionから企業一覧を取得中...")
     companies = get_notion_pages()
     print(f"対象企業数: {len(companies)} 件")
     
+    current_year = datetime.now().year
+
     for comp in companies:
         ticker = comp.get("ticker")
         name = comp.get("name")
         page_id = comp.get("page_id")
+        target_3years = comp.get("target_3years")
+        
         print(f"\n--- 処理開始: {name} (コード: {ticker}) ---")
         
-        # Notionページ内に「実際の画像」が存在する場合のみスキップ
-        if has_image_already(page_id):
-            print("すでに画像が埋め込み済みのためスキップします。")
-            continue
+        # すでにNotionに埋め込み済みの「年度」リストを取得
+        existing_years = get_existing_notion_years(page_id)
+        
+        # 探すべき対象年度の決定
+        # デフォルト: 直近（今年度または昨年度）
+        # 過去3年分チェックあり: 直近、1年前、2年前の3年分
+        target_years = [current_year, current_year - 1] if not target_3years else [current_year, current_year - 1, current_year - 2]
+        
+        chart_list_to_add = []
 
-        doc_id = search_edinet_doc_id(ticker)
-        if doc_id:
-            print(f"EDINET有価証券報告書を発見 (DocID: {doc_id})")
-            fin_data = fetch_xbrl_financial_data(doc_id)
+        for yr in target_years:
+            if yr in existing_years:
+                print(f"【スキップ】{yr}年度の画像はすでにNotion内に存在します。")
+                continue
             
-            if fin_data:
-                filename = f"chart_{ticker}.png"
-                create_financial_chart(name, fin_data, filename)
-                print(f"{name} の画像作成完了 ({filename})")
-                upload_chart_to_notion(page_id, filename)
-            else:
-                print("財務データの取得に失敗したためスキップします。")
+            doc_info = search_edinet_doc_by_year(ticker, target_year=yr)
+            if doc_info:
+                doc_id = doc_info["doc_id"]
+                print(f"【発 見】{yr}年度 EDINET報告書 (DocID: {doc_id})")
+                fin_data = fetch_xbrl_financial_data(doc_id)
+                
+                if fin_data:
+                    rel_path = f"images/{ticker}_{yr}.png"
+                    create_financial_chart(name, f"{yr}年度", fin_data, rel_path)
+                    chart_list_to_add.append({"year": yr, "rel_path": rel_path})
+                    
+                    # 1年分のみ取得設定の場合、最新期が1つ見つかれば終了
+                    if not target_3years:
+                        break
+
+        if chart_list_to_add:
+            upload_charts_to_notion(page_id, chart_list_to_add)
         else:
-            print("直近の報告書が検知されないため、作表をスキップします。")
+            print("新たに作成が必要な年度の画像はありませんでした。")
