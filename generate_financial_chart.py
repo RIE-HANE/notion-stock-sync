@@ -54,16 +54,34 @@ def get_notion_pages():
     return pages
 
 def search_edinet_doc_id(ticker):
-    """銘柄コードから直近1年以内の有価証券報告書(docID)を検索"""
-    if not ticker or ticker == "None":
+    """銘柄コードから有価証券報告書(docID)を検索（6月集中日などをカバー）"""
+    if not ticker or str(ticker) == "None":
         return None
     
     target_code = str(ticker).strip()[:4]
     today = datetime.now()
 
-    # 直近1年間の主要提出日をスキャン
-    for month_back in range(0, 12):
-        check_date = (today - timedelta(days=month_back * 30)).strftime("%Y-%m-%d")
+    # 有価証券報告書が提出されやすい主要な時期（過去365日の中の特定日＋直近30日）をスキャン
+    # 6月下旬（20日〜30日）、3月下旬（20日〜31日）などを重点検索
+    search_dates = []
+    
+    # 1. 直近14日間
+    for i in range(14):
+        search_dates.append((today - timedelta(days=i)).strftime("%Y-%m-%d"))
+        
+    # 2. 過去1年間の主要決算報告月（6月・3月・9月・12月の下旬）
+    current_year = today.year
+    for year in [current_year, current_year - 1]:
+        for month in [6, 3, 9, 12]:
+            for day in range(20, 31):
+                try:
+                    d_str = f"{year}-{month:02d}-{day:02d}"
+                    if d_str not in search_dates and d_str <= today.strftime("%Y-%m-%d"):
+                        search_dates.append(d_str)
+                except ValueError:
+                    continue
+
+    for check_date in search_dates:
         url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
         params = {
             "date": check_date,
@@ -71,12 +89,13 @@ def search_edinet_doc_id(ticker):
             "Subscription-Key": EDINET_API_KEY
         }
         try:
-            res = requests.get(url, params=params, timeout=5)
+            res = requests.get(url, params=params, timeout=3)
             if res.status_code == 200:
                 results = res.json().get("results", [])
                 for doc in results:
                     sec_code = str(doc.get("secCode", "")).strip()[:4]
-                    if sec_code == target_code and doc.get("docTypeCode") in ["120", "130"]:
+                    # docTypeCode: "120" は有価証券報告書
+                    if sec_code == target_code and doc.get("docTypeCode") == "120":
                         return doc.get("docID")
         except Exception:
             continue
@@ -137,6 +156,36 @@ def create_financial_chart(company_name, financial_data, output_path="chart.png"
     plt.savefig(output_path, bbox_inches='tight', dpi=200)
     plt.close()
 
+def upload_chart_to_notion(page_id, file_path):
+    """Notionページの本文へ画像通知を追加"""
+    url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "children": [
+            {
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {"content": f"📊 財務構造グラフ生成完了 ({datetime.now().strftime('%Y-%m-%d')})"}
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    res = requests.patch(url, headers=headers, json=payload)
+    if res.status_code == 200:
+        print(f"Notionページへの書き込み成功: {page_id}")
+    else:
+        print(f"Notion書き込みエラー: {res.text}")
+
 if __name__ == "__main__":
     print("Notionから企業一覧を取得中...")
     companies = get_notion_pages()
@@ -145,6 +194,7 @@ if __name__ == "__main__":
     for comp in companies:
         ticker = comp.get("ticker")
         name = comp.get("name")
+        page_id = comp.get("page_id")
         print(f"\n--- 処理開始: {name} (コード: {ticker}) ---")
         
         doc_id = search_edinet_doc_id(ticker)
@@ -156,6 +206,7 @@ if __name__ == "__main__":
                 filename = f"chart_{ticker}.png"
                 create_financial_chart(name, fin_data, filename)
                 print(f"{name} の画像作成完了 ({filename})")
+                upload_chart_to_notion(page_id, filename)
             else:
                 print("財務データの取得に失敗したためスキップします。")
         else:
