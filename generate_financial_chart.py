@@ -54,16 +54,15 @@ def get_notion_pages():
     return pages
 
 def search_edinet_doc_id(ticker):
-    """銘柄コードから直近1年以内の有価証券報告書(docID)をピンポイント検索"""
+    """銘柄コードから直近1年以内の有価証券報告書(docID)を検索"""
     if not ticker or ticker == "None":
         return None
     
-    target_code = str(ticker).strip()[:4] + "0"  # EDINETの5桁証券コード形式
+    target_code = str(ticker).strip()[:4]
     today = datetime.now()
 
-    # 有価証券報告書が集中する直近1年間の主要日を重点スキャン
+    # 直近1年間の主要提出日をスキャン
     for month_back in range(0, 12):
-        # 各月の月末・25日付近（有報提出の集中日）を中心にチェック
         check_date = (today - timedelta(days=month_back * 30)).strftime("%Y-%m-%d")
         url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
         params = {
@@ -76,8 +75,8 @@ def search_edinet_doc_id(ticker):
             if res.status_code == 200:
                 results = res.json().get("results", [])
                 for doc in results:
-                    sec_code = str(doc.get("secCode", "")).strip()
-                    if sec_code.startswith(target_code[:4]) and doc.get("docTypeCode") in ["120", "130"]:
+                    sec_code = str(doc.get("secCode", "")).strip()[:4]
+                    if sec_code == target_code and doc.get("docTypeCode") in ["120", "130"]:
                         return doc.get("docID")
         except Exception:
             continue
@@ -152,14 +151,12 @@ if __name__ == "__main__":
         if doc_id:
             print(f"EDINET有価証券報告書を発見 (DocID: {doc_id})")
             fin_data = fetch_xbrl_financial_data(doc_id)
+            
+            if fin_data:
+                filename = f"chart_{ticker}.png"
+                create_financial_chart(name, fin_data, filename)
+                print(f"{name} の画像作成完了 ({filename})")
+            else:
+                print("財務データの取得に失敗したためスキップします。")
         else:
-            print("直近の報告書未検知。標準モデルデータでグラフを作成します。")
-            fin_data = {
-                "total_assets": 1000, "current_assets": 450, "fixed_assets": 550,
-                "current_liab": 250, "fixed_liab": 200, "equity": 550,
-                "sales": 900, "op_profit": 120
-            }
-        
-        filename = f"chart_{ticker if ticker else 'unknown'}.png"
-        create_financial_chart(name, fin_data, filename)
-        print(f"{name} の画像作成完了 ({filename})")
+            print("直近の報告書が検知されないため、作表をスキップします。")
