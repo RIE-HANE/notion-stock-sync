@@ -24,4 +24,4 @@ jobs:
       - name: Run Sync Script
         env:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
-        run: python sync_company_data.py
+        run: python update_stock.py
