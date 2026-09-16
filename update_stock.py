@@ -129,11 +129,16 @@ def main():
                 update_notion_price(page_id, price)
             
             # ノート本文が空（またはテンプレート選択待ち状態）の場合に挿入
+            # ページの既存ブロック（本文）を取得
             existing_blocks = get_page_blocks(page_id)
+            print(f"{code} の既存ブロック数: {len(existing_blocks)}")
+
             if len(existing_blocks) <= 2:
+                print(f"-> テンプレートを挿入します")
                 append_notebook_template(page_id, code, info)
                 print(f"Notebook template added for {code}")
-                
+            else:
+                print(f"-> 本文が存在するためスキップされました")    
         except Exception as e:
             print(f"Error processing {code}: {e}")
 
