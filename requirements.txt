@@ -3,3 +3,4 @@ yfinance
 beautifulsoup4
 requests
 matplotlib
+japanize-matplotlib
