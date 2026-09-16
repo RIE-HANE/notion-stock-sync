@@ -73,7 +73,6 @@ def get_existing_notion_years(page_id):
     if res.status_code == 200:
         blocks = res.json().get("results", [])
         for block in blocks:
-            # テキストブロックの中から「20XX年度」の年番号を探す
             b_type = block.get("type")
             if b_type in ["paragraph", "heading_1", "heading_2", "heading_3"]:
                 txts = block.get(b_type, {}).get("rich_text", [])
@@ -92,7 +91,6 @@ def search_edinet_doc_by_year(ticker, target_year):
     target_code = str(ticker).strip()[:4]
     today = datetime.now()
     
-    # 有報が提出される6月・3月の提出日を検索
     search_dates = [f"{target_year}-06-{day:02d}" for day in range(20, 31)]
     search_dates += [f"{target_year}-03-{day:02d}" for day in range(20, 31)]
     
@@ -118,7 +116,7 @@ def search_edinet_doc_by_year(ticker, target_year):
     return None
 
 def fetch_xbrl_financial_data(doc_id):
-    """EDINET APIから財務データを取得（サンプル構造）"""
+    """EDINET APIから財務データを取得"""
     if not doc_id:
         return None
 
@@ -169,22 +167,24 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     plt.axis('off')
     plt.title(f"{company_name} ({year_label}) 財務構造分析図", fontsize=16)
     
-    # imagesフォルダが存在しない場合は作成
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     plt.savefig(output_path, bbox_inches='tight', dpi=200)
     plt.close()
 
 def upload_charts_to_notion(page_id, chart_list):
-    """Notionに「年度付きの見出し」と「画像URL」を追加"""
+    """Notionに「年度付きの見出し」と「正確なGitHub画像URL」を追加"""
     children_blocks = []
 
     for item in chart_list:
-        raw_image_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{item['rel_path']}"
+        # パス区切り文字をスラッシュに整えた絶対URLを作成
+        rel_path = item['rel_path'].replace("\\", "/")
+        raw_image_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{rel_path}"
+        
         children_blocks.append({
             "object": "block",
             "type": "paragraph",
             "paragraph": {
-                "rich_text": [{"type": "text", "text": {"content": f"🔻 {item['year']}年度 財務構造 (BS/PL)"}}]
+                "rich_text": [{"type": "text", "text": {"content": f"▼ {item['year']}年度 財務構造 (BS/PL)"}}]
             }
         })
         children_blocks.append({
@@ -224,12 +224,9 @@ if __name__ == "__main__":
         
         print(f"\n--- 処理開始: {name} (コード: {ticker}) ---")
         
-        # すでにNotionに埋め込み済みの「年度」リストを取得
         existing_years = get_existing_notion_years(page_id)
         
-        # 探すべき対象年度の決定
-        # デフォルト: 直近（今年度または昨年度）
-        # 過去3年分チェックあり: 直近、1年前、2年前の3年分
+        # 探すべき対象年度
         target_years = [current_year, current_year - 1] if not target_3years else [current_year, current_year - 1, current_year - 2]
         
         chart_list_to_add = []
@@ -250,7 +247,6 @@ if __name__ == "__main__":
                     create_financial_chart(name, f"{yr}年度", fin_data, rel_path)
                     chart_list_to_add.append({"year": yr, "rel_path": rel_path})
                     
-                    # 1年分のみ取得設定の場合、最新期が1つ見つかれば終了
                     if not target_3years:
                         break
 
