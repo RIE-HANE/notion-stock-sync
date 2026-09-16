@@ -14,7 +14,6 @@ DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "RIE-HANE/notion-stock-sync")
 
 def get_notion_pages():
-    """Notionから企業一覧と「過去3年分作成」チェック状態を取得"""
     url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -63,7 +62,6 @@ def get_notion_pages():
     return pages
 
 def get_existing_notion_years(page_id):
-    """Notionページ内にすでに存在する年度を取得"""
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -86,7 +84,6 @@ def get_existing_notion_years(page_id):
     return existing_years
 
 def search_edinet_doc_by_year(ticker, target_year):
-    """指定年度の有価証券報告書(120)を検索"""
     if not ticker or str(ticker) == "None":
         return None
     
@@ -118,7 +115,6 @@ def search_edinet_doc_by_year(ticker, target_year):
     return None
 
 def fetch_xbrl_financial_data(doc_id):
-    """EDINET APIから財務データを取得"""
     if not doc_id:
         return None
 
@@ -142,7 +138,6 @@ def fetch_xbrl_financial_data(doc_id):
     return None
 
 def create_financial_chart(company_name, year_label, financial_data, output_path):
-    """BS/PL図解画像をローカルに保存"""
     fig, ax = plt.subplots(figsize=(10, 8))
     
     total_assets = financial_data.get("total_assets", 1000) or 1000
@@ -169,14 +164,12 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     plt.axis('off')
     plt.title(f"{company_name} ({year_label}) 財務構造分析図", fontsize=16)
     
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    os.makedirs("images", exist_ok=True)
     plt.savefig(output_path, bbox_inches='tight', dpi=200)
     plt.close()
 
 def sync_pending_images_to_notion(tasks):
-    """画像ファイルがGitHubに保存された後にNotionに画像ブロックを追加"""
-    # GitHub CDN (jsDelivr) を経由して即時反映させるURL構造
-    # jsDelivrはGitHubコミット直後の画像を高速に配信できます
+    now_ts = int(time.time())
     
     for task in tasks:
         page_id = task['page_id']
@@ -184,8 +177,7 @@ def sync_pending_images_to_notion(tasks):
         
         children_blocks = []
         for item in chart_list:
-            # jsDelivr CDNを利用した即時反映URL
-            image_url = f"https://cdn.jsdelivr.net/gh/{GITHUB_REPOSITORY}@main/{item['rel_path']}"
+            raw_image_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{item['rel_path']}?v={now_ts}"
             
             children_blocks.append({
                 "object": "block",
@@ -199,7 +191,7 @@ def sync_pending_images_to_notion(tasks):
                 "type": "image",
                 "image": {
                     "type": "external",
-                    "external": {"url": image_url}
+                    "external": {"url": raw_image_url}
                 }
             })
 
@@ -221,6 +213,7 @@ if __name__ == "__main__":
     
     if mode == "GENERATE":
         print("【Phase 1】作図処理を開始します...")
+        os.makedirs("images", exist_ok=True)
         companies = get_notion_pages()
         current_year = datetime.now().year
 
@@ -230,6 +223,9 @@ if __name__ == "__main__":
             page_id = comp.get("page_id")
             target_3years = comp.get("target_3years")
             
+            if not ticker or str(ticker) == "None":
+                continue
+                
             print(f"\n--- 処理開始: {name} (コード: {ticker}) ---")
             existing_years = get_existing_notion_years(page_id)
             target_years = [current_year, current_year - 1] if not target_3years else [current_year, current_year - 1, current_year - 2]
@@ -246,25 +242,25 @@ if __name__ == "__main__":
                     fin_data = fetch_xbrl_financial_data(doc_id)
                     
                     if fin_data:
-                        rel_path = f"images/{ticker}_{yr}.png"
+                        file_name = f"{ticker}_{yr}.png"
+                        rel_path = f"images/{file_name}"
                         create_financial_chart(name, f"{yr}年度", fin_data, rel_path)
+                        print(f"画像ファイルを生成しました: {rel_path}")
                         if not target_3years:
                             break
 
     elif mode == "NOTION_SYNC":
         print("【Phase 2】保存された画像をNotionへ反映中...")
-        # GitHubへのPush反映待ちとして10秒スリープを入れて確実にURLを有効化
-        print("GitHub側の反映を10秒間待機しています...")
-        time.sleep(10)
-        
         companies = get_notion_pages()
         pending_tasks = []
 
         for comp in companies:
             ticker = comp.get("ticker")
             page_id = comp.get("page_id")
+            if not ticker or str(ticker) == "None":
+                continue
+
             existing_years = get_existing_notion_years(page_id)
-            
             local_files = glob.glob(f"images/{ticker}_*.png")
             chart_list = []
             
