@@ -128,9 +128,9 @@ def main():
             if price:
                 update_notion_price(page_id, price)
             
-            # ノート本文が空の場合のみ、テンプレとデータを挿入
+            # ノート本文が空（またはテンプレート選択待ち状態）の場合に挿入
             existing_blocks = get_page_blocks(page_id)
-            if len(existing_blocks) == 0:
+            if len(existing_blocks) <= 2:
                 append_notebook_template(page_id, code, info)
                 print(f"Notebook template added for {code}")
                 
