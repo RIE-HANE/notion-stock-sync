@@ -1,5 +1,6 @@
 import os
 import glob
+import time
 import requests
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -174,14 +175,16 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
 
 def sync_pending_images_to_notion(tasks):
     """画像ファイルがGitHubに保存された後にNotionに画像ブロックを追加"""
+    now_ts = int(time.time())
+    
     for task in tasks:
         page_id = task['page_id']
         chart_list = task['chart_list']
         
         children_blocks = []
         for item in chart_list:
-            # GitHub Raw URL
-            raw_image_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{item['rel_path']}"
+            # キャッシュ回避用タイムスタンプ(?v=...)を付与
+            raw_image_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{item['rel_path']}?v={now_ts}"
             
             children_blocks.append({
                 "object": "block",
@@ -257,7 +260,6 @@ if __name__ == "__main__":
             page_id = comp.get("page_id")
             existing_years = get_existing_notion_years(page_id)
             
-            # 存在するローカル画像ファイルをスキャン
             local_files = glob.glob(f"images/{ticker}_*.png")
             chart_list = []
             
