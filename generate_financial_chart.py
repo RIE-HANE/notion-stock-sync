@@ -54,8 +54,8 @@ def get_notion_pages():
         
     return pages
 
-def is_already_processed(page_id):
-    """Notionページ内にすでに画像・グラフが存在するか判定"""
+def has_image_already(page_id):
+    """Notionページ内にすでに『画像ブロック(image)』が存在するか厳密判定"""
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -65,14 +65,9 @@ def is_already_processed(page_id):
     if res.status_code == 200:
         blocks = res.json().get("results", [])
         for block in blocks:
-            # 画像ブロック、またはテキスト内に「財務構造」が含まれているか判定
+            # 純粋に画像ブロックが存在する場合のみTrueを返す
             if block.get("type") == "image":
                 return True
-            if block.get("type") == "paragraph":
-                rich_text = block.get("paragraph", {}).get("rich_text", [])
-                for text_obj in rich_text:
-                    if "財務構造" in text_obj.get("plain_text", ""):
-                        return True
     return False
 
 def search_edinet_doc_id(ticker):
@@ -174,7 +169,6 @@ def create_financial_chart(company_name, financial_data, output_path="chart.png"
 
 def upload_chart_to_notion(page_id, file_path):
     """GitHub Raw URLを参照してNotion内に『画像ブロック』を埋め込み"""
-    # GitHub上の画像Raw URL
     raw_image_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{file_path}"
     
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
@@ -221,9 +215,9 @@ if __name__ == "__main__":
         page_id = comp.get("page_id")
         print(f"\n--- 処理開始: {name} (コード: {ticker}) ---")
         
-        # 既にNotion内にグラフ生成済みのログ・画像があるか判定
-        if is_already_processed(page_id):
-            print("すでにグラフが存在するためスキップします。")
+        # Notionページ内に「実際の画像」が存在する場合のみスキップ
+        if has_image_already(page_id):
+            print("すでに画像が埋め込み済みのためスキップします。")
             continue
 
         doc_id = search_edinet_doc_id(ticker)
