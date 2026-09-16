@@ -2,8 +2,8 @@ import os
 import requests
 import yfinance as yf
 
-NOTION_TOKEN = os.environ["NOTION_TOKEN"]
-DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
+NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
+DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 
 headers = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -106,17 +106,30 @@ def append_notebook_template(page_id, code, info):
     requests.patch(url, headers=headers, json={"children": blocks})
 
 def main():
+    print("=== スクリプト処理を開始します ===")
     pages = get_notion_pages()
+    print(f"取得したページ数: {len(pages)}")
     
     for page in pages:
         page_id = page["id"]
         props = page["properties"]
         
-        code_prop = props.get("証券コード", {}).get("number")
-        if not code_prop:
+        # 証券コードの取得（数値型・テキスト型どちらにも対応）
+        code_prop = props.get("証券コード", {})
+        code = None
+
+        if code_prop.get("type") == "number":
+            code = code_prop.get("number")
+        elif code_prop.get("type") == "rich_text":
+            rich_texts = code_prop.get("rich_text", [])
+            if rich_texts:
+                code = rich_texts[0].get("plain_text")
+
+        if not code:
+            print(f"スキップ: ページID {page_id} は証券コードが空です")
             continue
             
-        code = str(code_prop)
+        code = str(code).strip()
         print(f"Processing: {code}...")
         
         try:
@@ -128,7 +141,6 @@ def main():
             if price:
                 update_notion_price(page_id, price)
             
-            # ノート本文が空（またはテンプレート選択待ち状態）の場合に挿入
             # ページの既存ブロック（本文）を取得
             existing_blocks = get_page_blocks(page_id)
             print(f"{code} の既存ブロック数: {len(existing_blocks)}")
