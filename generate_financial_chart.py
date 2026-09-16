@@ -3,6 +3,7 @@ import io
 import requests
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import japanize_matplotlib
 from bs4 import BeautifulSoup
 
 # 環境変数
