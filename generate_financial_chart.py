@@ -62,7 +62,7 @@ def get_notion_pages():
     return pages
 
 def get_existing_notion_image_years(page_id):
-    """Notionページ内にすでに正常な『画像ブロック』として存在する年度を取得"""
+    """Notionページ内にすでに存在する年度を取得"""
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -138,7 +138,6 @@ def fetch_xbrl_financial_data(doc_id):
 
     return None
 
-# ★項目名（テキスト＋凡例）を追加した作図関数★
 def create_financial_chart(company_name, year_label, financial_data, output_path):
     fig, ax = plt.subplots(figsize=(10, 8))
     
@@ -165,19 +164,16 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     ax.add_patch(patches.Rectangle((75, 0), 20, sales_h, facecolor='#ffcccb', edgecolor='black', label='売上高'))
     ax.add_patch(patches.Rectangle((75, 0), 20, op_h, facecolor='#ff4500', edgecolor='black', label='営業利益'))
 
-    # 各要素の中に項目名を書き込む
+    # 文字入れ
     ax.text(20, 100 - ca_h/2, '流動資産', ha='center', va='center', fontsize=11, fontweight='bold')
     ax.text(20, fa_h/2, '固定資産', ha='center', va='center', fontsize=11, fontweight='bold', color='white')
-    
     ax.text(50, 100 - cl_h/2, '流動負債', ha='center', va='center', fontsize=11, fontweight='bold')
     ax.text(50, 100 - cl_h - fl_h/2, '固定負債', ha='center', va='center', fontsize=11, fontweight='bold', color='white')
     ax.text(50, eq_h/2, '純資産', ha='center', va='center', fontsize=11, fontweight='bold')
-    
     ax.text(85, sales_h + 3, '売上高', ha='center', va='bottom', fontsize=11, fontweight='bold')
     if op_h > 5:
         ax.text(85, op_h/2, '営業利益', ha='center', va='center', fontsize=10, fontweight='bold', color='white')
 
-    # 凡例を表示
     ax.legend(loc='upper right', bbox_to_anchor=(1.35, 1), fontsize=10, frameon=True)
 
     ax.set_xlim(0, 110)
@@ -194,6 +190,9 @@ def sync_pending_images_to_notion(tasks):
     for task in tasks:
         page_id = task['page_id']
         chart_list = task['chart_list']
+        
+        # ★年度の古い順（2024 -> 2025 -> 2026）にソート★
+        chart_list = sorted(chart_list, key=lambda x: x['year'])
         
         children_blocks = []
         for item in chart_list:
@@ -250,7 +249,12 @@ if __name__ == "__main__":
                 
             print(f"\n--- 処理開始: {name} (コード: {ticker}) ---")
             existing_years = get_existing_notion_image_years(page_id)
-            target_years = [current_year, current_year - 1] if not target_3years else [current_year, current_year - 1, current_year - 2]
+            
+            # ★生成対象の年度も古い順（例: [2024, 2025, 2026]）に整列★
+            if target_3years:
+                target_years = [current_year - 2, current_year - 1, current_year]
+            else:
+                target_years = [current_year - 1, current_year]
 
             for yr in target_years:
                 if yr in existing_years:
@@ -268,8 +272,6 @@ if __name__ == "__main__":
                         rel_path = f"images/{file_name}"
                         create_financial_chart(name, f"{yr}年度", fin_data, rel_path)
                         print(f"画像ファイルを生成しました: {rel_path}")
-                        if not target_3years:
-                            break
 
     elif mode == "NOTION_SYNC":
         print("【Phase 2】未追加の画像のみNotionへ反映中...")
@@ -297,6 +299,8 @@ if __name__ == "__main__":
                     continue
 
             if chart_list:
+                # ★追加前にも念のため古い順へソート★
+                chart_list = sorted(chart_list, key=lambda x: x['year'])
                 pending_tasks.append({"page_id": page_id, "chart_list": chart_list})
 
         if pending_tasks:
