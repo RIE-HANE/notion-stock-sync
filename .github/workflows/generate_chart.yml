@@ -26,4 +26,13 @@ jobs:
         NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
         NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
         EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
       run: python generate_financial_chart.py
+
+    - name: Commit and push generated charts
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git add *.png || true
+        git commit -m "Add generated financial charts" || true
+        git push || true
