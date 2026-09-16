@@ -1,0 +1,5 @@
+notion-client
+yfinance
+beautifulsoup4
+requests
+matplotlib
