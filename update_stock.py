@@ -88,9 +88,11 @@ def get_page_blocks(page_id):
     res = requests.get(url, headers=headers)
     return res.json().get("results", [])
 
-
 def append_notebook_template(page_id, code, info):
-    # 指標データの整形
+    # 1. 企業概要（事業内容テキスト）の取得
+    summary = info.get("longBusinessSummary", "※事業概要データなし")
+
+    # 2. 指標データの整形
     mcap = info.get("marketCap")
     mcap_str = f"{mcap / 100000000:,.1f} 億円" if mcap else "-"
     per = round(info.get("trailingPE"), 2) if info.get("trailingPE") else "-"
@@ -140,6 +142,19 @@ def append_notebook_template(page_id, code, info):
                             "link": {"url": yahoo_financial_url},
                         },
                     },
+                ]
+            },
+        },
+        # ★ ここに企業概要の解説テキストを追加！
+        {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {"content": summary[:1000]},
+                    }  # 文字数制限考慮
                 ]
             },
         },
@@ -219,7 +234,6 @@ def append_notebook_template(page_id, code, info):
 
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     requests.patch(url, headers=headers, json={"children": blocks})
-
 
 def main():
     print("=== スクリプト処理を開始します ===")
