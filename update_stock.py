@@ -1,88 +1,140 @@
-from notion_client import Client
+import os
+import requests
 import yfinance as yf
 
-# 1. アクセストークンとデータベースID
-NOTION_TOKEN = "ntn_nX464811020bEJSuYhIeUadAjlQmTXDNm6ZqjK20riQ1Hf"
-DATABASE_ID = "3d801bb4740c8025b1a8efc2cf1d1595"
+NOTION_TOKEN = os.getenv("NOTION_TOKEN", "ntn_nX464811020bEJSuYhIeUadAjlQmTXDNm6ZqjK20riQ1Hf")
+DATABASE_ID = os.getenv("NOTION_DATABASE_ID", "3d801bb4740c8025b1a8efc2cf1d1595")
+headers = {
+    "Authorization": f"Bearer {NOTION_TOKEN}",
+    "Content-Type": "application/json",
+    "Notion-Version": "2022-06-28",
+}
 
-notion = Client(auth=NOTION_TOKEN)
+def get_notion_pages():
+    url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
+    res = requests.post(url, headers=headers)
+    return res.json().get("results", [])
 
+def update_notion_price(page_id, price):
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    payload = {"properties": {"株価": {"number": price}}}
+    requests.patch(url, headers=headers, json=payload)
 
-def get_stock_price(code_str):
-    """証券コード（文字列）からYahoo Financeの株価を取得"""
-    try:
-        # 日本株のTickerシンボル（例: "6702.T"）を作成
-        ticker_symbol = f"{code_str.strip()}.T"
-        ticker = yf.Ticker(ticker_symbol)
-        todays_data = ticker.history(period="1d")
+def get_page_blocks(page_id):
+    url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+    res = requests.get(url, headers=headers)
+    return res.json().get("results", [])
 
-        if not todays_data.empty:
-            price = round(todays_data["Close"].iloc[-1], 2)
-            return price
-    except Exception as e:
-        print(f"  └ 株価取得失敗 ({code_str}): {e}")
-    return None
+def append_notebook_template(page_id, code, info):
+    # 指標データの整形
+    price = info.get("currentPrice") or info.get("regularMarketPrice") or "-"
+    mcap = info.get("marketCap")
+    mcap_str = f"{mcap / 100000000:,.1f} 億円" if mcap else "-"
+    per = round(info.get("trailingPE"), 2) if info.get("trailingPE") else "-"
+    pbr = round(info.get("priceToBook"), 2) if info.get("priceToBook") else "-"
+    industry = info.get("industryKey") or info.get("sector") or "-"
+    summary = info.get("longBusinessSummary") or "事業内容をここに記入"
 
+    # Notionブロックの組み立て
+    blocks = [
+        # --- 企業概要 ---
+        {
+            "object": "block",
+            "type": "heading_2",
+            "heading_2": {"rich_text": [{"type": "text", "text": {"content": "🏢 企業概要"}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": f"証券コード : {code}"}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": f"主な事業内容 : {industry}"}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": f"概要 : {summary[:100]}..."}}]}
+        },
+        {"object": "block", "type": "divider", "divider": {}},
 
-def update_notion_stocks():
-    print(
-        "🚀 Notionの「証券コード」を元に、最新株価の自動更新処理を開始します...\n"
-    )
+        # --- 業績・指標チェック ---
+        {
+            "object": "block",
+            "type": "heading_2",
+            "heading_2": {"rich_text": [{"type": "text", "text": {"content": "📊 業績・指標チェック"}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": f"時価総額 : {mcap_str}"}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": f"PER / PBR : (連){per}倍 / (連){pbr}倍"}}]}
+        },
+        {"object": "block", "type": "divider", "divider": {}},
 
-    # Notionから企業リストを取得
-    response = notion.search(filter={"value": "page", "property": "object"})
-    results = response.get("results", [])
-
-    db_pages = [
-        page
-        for page in results
-        if page.get("parent", {}).get("database_id", "").replace("-", "")
-        == DATABASE_ID
+        # --- 投資メモ・アクション ---
+        {
+            "object": "block",
+            "type": "heading_2",
+            "heading_2": {"rich_text": [{"type": "text", "text": {"content": "🎯 投資メモ・アクション"}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": "成長シナリオ（追い風） : "}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": "リスク（向かい風） : "}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": "自分のアクション : "}}]}
+        }
     ]
 
-    for page in db_pages:
+    url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+    requests.patch(url, headers=headers, json={"children": blocks})
+
+def main():
+    pages = get_notion_pages()
+    
+    for page in pages:
         page_id = page["id"]
-        properties = page.get("properties", {})
-
-        # 1. 企業名の取得
-        title_prop = properties.get("名前", {}).get("title", [])
-        if not title_prop:
-            continue
-        company_name = title_prop[0].get("text", {}).get("content", "").strip()
-
-        # 2. Notionから「証券コード」プロパティの文字列を取得
-        code_prop = properties.get("証券コード", {}).get("rich_text", [])
+        props = page["properties"]
+        
+        code_prop = props.get("証券コード", {}).get("number")
         if not code_prop:
-            print(
-                f"ℹ️ {company_name}: 証券コードが未登録のためスキップします"
-            )
             continue
-
-        ticker_code = code_prop[0].get("text", {}).get("content", "").strip()
-
-        if not ticker_code:
-            print(
-                f"ℹ️ {company_name}: 証券コードが空欄のためスキップします"
-            )
-            continue
-
-        # 3. 株価を取得してNotionの「株価」プロパティを更新
-        price = get_stock_price(ticker_code)
-
-        if price is not None:
-            notion.pages.update(
-                page_id=page_id, properties={"株価": {"number": price}}
-            )
-            print(
-                f"✅ {company_name} (コード: {ticker_code}) -> 株価: {price} 円 に更新しました"
-            )
-        else:
-            print(
-                f"⚠️ {company_name} (コード: {ticker_code}): 株価データの取得に失敗しました"
-            )
-
-    print("\n🎉 すべての更新処理が完了しました！")
-
+            
+        code = str(code_prop)
+        print(f"Processing: {code}...")
+        
+        try:
+            ticker = yf.Ticker(f"{code}.T")
+            info = ticker.info
+            
+            # DBの株価プロパティを更新
+            price = info.get("currentPrice") or info.get("regularMarketPrice")
+            if price:
+                update_notion_price(page_id, price)
+            
+            # ノート本文が空の場合のみ、テンプレとデータを挿入
+            existing_blocks = get_page_blocks(page_id)
+            if len(existing_blocks) == 0:
+                append_notebook_template(page_id, code, info)
+                print(f"Notebook template added for {code}")
+                
+        except Exception as e:
+            print(f"Error processing {code}: {e}")
 
 if __name__ == "__main__":
-    update_notion_stocks()
+    main()
