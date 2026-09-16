@@ -74,13 +74,6 @@ def get_existing_notion_image_years(page_id):
     if res.status_code == 200:
         blocks = res.json().get("results", [])
         for block in blocks:
-            # 単なるテキストではなく、imageブロックが存在する場合のみ確認
-            if block.get("type") == "image":
-                # 直前または周辺のコンテキストから年度を判定、または全画像ブロック数をカウント
-                # ここでは安全のため、画像が存在すればその数をベースに判定します
-                pass
-            
-            # テキストブロックからも年度を判定
             b_type = block.get("type")
             if b_type in ["paragraph", "heading_1", "heading_2", "heading_3"]:
                 txts = block.get(b_type, {}).get("rich_text", [])
@@ -145,6 +138,7 @@ def fetch_xbrl_financial_data(doc_id):
 
     return None
 
+# ★項目名（テキスト＋凡例）を追加した作図関数★
 def create_financial_chart(company_name, year_label, financial_data, output_path):
     fig, ax = plt.subplots(figsize=(10, 8))
     
@@ -158,19 +152,38 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     sales_h = (financial_data.get("sales", 800) / total_assets) * 100
     op_h = (financial_data.get("op_profit", 100) / total_assets) * 100
 
+    # 資産（左柱）
     ax.add_patch(patches.Rectangle((5, 100 - ca_h), 30, ca_h, facecolor='#87ceeb', edgecolor='black', label='流動資産'))
     ax.add_patch(patches.Rectangle((5, 0), 30, fa_h, facecolor='#4682b4', edgecolor='black', label='固定資産'))
+    
+    # 負債・純資産（中柱）
     ax.add_patch(patches.Rectangle((35, 100 - cl_h), 30, cl_h, facecolor='#f08080', edgecolor='black', label='流動負債'))
     ax.add_patch(patches.Rectangle((35, 100 - cl_h - fl_h), 30, fl_h, facecolor='#cd5c5c', edgecolor='black', label='固定負債'))
     ax.add_patch(patches.Rectangle((35, 0), 30, eq_h, facecolor='#90ee90', edgecolor='black', label='純資産'))
 
+    # 損益（右柱）
     ax.add_patch(patches.Rectangle((75, 0), 20, sales_h, facecolor='#ffcccb', edgecolor='black', label='売上高'))
     ax.add_patch(patches.Rectangle((75, 0), 20, op_h, facecolor='#ff4500', edgecolor='black', label='営業利益'))
 
-    ax.set_xlim(0, 100)
+    # 各要素の中に項目名を書き込む
+    ax.text(20, 100 - ca_h/2, '流動資産', ha='center', va='center', fontsize=11, fontweight='bold')
+    ax.text(20, fa_h/2, '固定資産', ha='center', va='center', fontsize=11, fontweight='bold', color='white')
+    
+    ax.text(50, 100 - cl_h/2, '流動負債', ha='center', va='center', fontsize=11, fontweight='bold')
+    ax.text(50, 100 - cl_h - fl_h/2, '固定負債', ha='center', va='center', fontsize=11, fontweight='bold', color='white')
+    ax.text(50, eq_h/2, '純資産', ha='center', va='center', fontsize=11, fontweight='bold')
+    
+    ax.text(85, sales_h + 3, '売上高', ha='center', va='bottom', fontsize=11, fontweight='bold')
+    if op_h > 5:
+        ax.text(85, op_h/2, '営業利益', ha='center', va='center', fontsize=10, fontweight='bold', color='white')
+
+    # 凡例を表示
+    ax.legend(loc='upper right', bbox_to_anchor=(1.35, 1), fontsize=10, frameon=True)
+
+    ax.set_xlim(0, 110)
     ax.set_ylim(-10, 110)
     plt.axis('off')
-    plt.title(f"{company_name} ({year_label}) 財務構造分析図", fontsize=16)
+    plt.title(f"{company_name} ({year_label}) 財務構造分析図", fontsize=16, pad=20)
     
     os.makedirs("images", exist_ok=True)
     plt.savefig(output_path, bbox_inches='tight', dpi=200)
@@ -277,7 +290,6 @@ if __name__ == "__main__":
                 filename = os.path.basename(file_path)
                 try:
                     yr = int(filename.split("_")[1].split(".")[0])
-                    # Notion側にまだその年度が存在しない場合のみ追加対象にする
                     if yr not in existing_years:
                         rel_path = f"images/{filename}".replace("\\", "/")
                         chart_list.append({"year": yr, "rel_path": rel_path})
