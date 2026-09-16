@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 import yfinance as yf
 
@@ -10,6 +11,28 @@ headers = {
     "Content-Type": "application/json",
     "Notion-Version": "2022-06-28",
 }
+
+def get_clean_stock_code(page_properties):
+    """「証券コード」プロパティ、または「ページタイトル」から4桁の数字を抽出する"""
+    # 1. まず「証券コード」列の値を確認
+    code_prop = page_properties.get("証券コード", {})
+    rich_text = code_prop.get("rich_text", [])
+    if rich_text:
+        raw_code = rich_text[0].get("plain_text", "")
+        match = re.search(r"\d{4}", raw_code)
+        if match:
+            return match.group(0)
+
+    # 2. 空なら「名前（タイトル）」から4桁数字を検索
+    title_prop = page_properties.get("名前", {})
+    title_text = title_prop.get("title", [])
+    if title_text:
+        raw_title = title_text[0].get("plain_text", "")
+        match = re.search(r"\d{4}", raw_title)
+        if match:
+            return match.group(0)
+
+    return None
 
 def get_notion_pages():
     url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
@@ -61,85 +84,6 @@ def append_notebook_template(page_id, code, info):
                     {"type": "text", "text": {"content": "業績詳細", "link": {"url": yahoo_financial_url}}}
                 ]
             }
-        },
-        {"object": "block", "type": "divider", "divider": {}},
-
-        # --- 業績・指標チェック ---
-        {
-            "object": "block",
-            "type": "heading_2",
-            "heading_2": {"rich_text": [{"type": "text", "text": {"content": "📊 業績・指標チェック"}}]}
-        },
-        {
-            "object": "block",
-            "type": "bulleted_list_item",
-            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": f"時価総額 : {mcap_str}"}}]}
-        },
-        {
-            "object": "block",
-            "type": "bulleted_list_item",
-            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": f"PER / PBR : (連){per}倍 / (連){pbr}倍"}}]}
-        },
-        {"object": "block", "type": "divider", "divider": {}},
-
-        # --- 投資メモ・アクション ---
-        {
-            "object": "block",
-            "type": "heading_2",
-            "heading_2": {"rich_text": [{"type": "text", "text": {"content": "🎯 投資メモ・アクション"}}]}
-        },
-        {
-            "object": "block",
-            "type": "bulleted_list_item",
-            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": "成長シナリオ（追い風） : "}}]}
-        },
-        {
-            "object": "block",
-            "type": "bulleted_list_item",
-            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": "リスク（向かい風） : "}}]}
-        },
-        {
-            "object": "block",
-            "type": "bulleted_list_item",
-            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": "自分のアクション : "}}]}
-        }
-    ]
-
-    url = f"https://api.notion.com/v1/blocks/{page_id}/children"
-    requests.patch(url, headers=headers, json={"children": blocks})
-
-def append_notebook_template(page_id, code, info):
-    # 指標データの整形
-    price = info.get("currentPrice") or info.get("regularMarketPrice") or "-"
-    mcap = info.get("marketCap")
-    mcap_str = f"{mcap / 100000000:,.1f} 億円" if mcap else "-"
-    per = round(info.get("trailingPE"), 2) if info.get("trailingPE") else "-"
-    pbr = round(info.get("priceToBook"), 2) if info.get("priceToBook") else "-"
-    industry = info.get("industryKey") or info.get("sector") or "-"
-    summary = info.get("longBusinessSummary") or "事業内容をここに記入"
-
-    # Notionブロックの組み立て
-    blocks = [
-        # --- 企業概要 ---
-        {
-            "object": "block",
-            "type": "heading_2",
-            "heading_2": {"rich_text": [{"type": "text", "text": {"content": "🏢 企業概要"}}]}
-        },
-        {
-            "object": "block",
-            "type": "bulleted_list_item",
-            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": f"証券コード : {code}"}}]}
-        },
-        {
-            "object": "block",
-            "type": "bulleted_list_item",
-            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": f"主な事業内容 : {industry}"}}]}
-        },
-        {
-            "object": "block",
-            "type": "bulleted_list_item",
-            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": f"概要 : {summary[:100]}..."}}]}
         },
         {"object": "block", "type": "divider", "divider": {}},
 
