@@ -28,6 +28,88 @@ def get_page_blocks(page_id):
 
 def append_notebook_template(page_id, code, info):
     # 指標データの整形
+    mcap = info.get("marketCap")
+    mcap_str = f"{mcap / 100000000:,.1f} 億円" if mcap else "-"
+    per = round(info.get("trailingPE"), 2) if info.get("trailingPE") else "-"
+    pbr = round(info.get("priceToBook"), 2) if info.get("priceToBook") else "-"
+
+    # 日本版Yahoo!ファイナンスのURL生成
+    yahoo_top_url = f"https://finance.yahoo.co.jp/quote/{code}.T"
+    yahoo_financial_url = f"https://finance.yahoo.co.jp/quote/{code}.T/financials"
+
+    # Notionブロックの組み立て
+    blocks = [
+        # --- 企業概要・リンク ---
+        {
+            "object": "block",
+            "type": "heading_2",
+            "heading_2": {"rich_text": [{"type": "text", "text": {"content": "🏢 企業概要"}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": f"証券コード : {code}"}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {
+                "rich_text": [
+                    {"type": "text", "text": {"content": "Yahoo!ファイナンス : "}},
+                    {"type": "text", "text": {"content": "トップページ", "link": {"url": yahoo_top_url}}},
+                    {"type": "text", "text": {"content": " / "}},
+                    {"type": "text", "text": {"content": "業績詳細", "link": {"url": yahoo_financial_url}}}
+                ]
+            }
+        },
+        {"object": "block", "type": "divider", "divider": {}},
+
+        # --- 業績・指標チェック ---
+        {
+            "object": "block",
+            "type": "heading_2",
+            "heading_2": {"rich_text": [{"type": "text", "text": {"content": "📊 業績・指標チェック"}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": f"時価総額 : {mcap_str}"}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": f"PER / PBR : (連){per}倍 / (連){pbr}倍"}}]}
+        },
+        {"object": "block", "type": "divider", "divider": {}},
+
+        # --- 投資メモ・アクション ---
+        {
+            "object": "block",
+            "type": "heading_2",
+            "heading_2": {"rich_text": [{"type": "text", "text": {"content": "🎯 投資メモ・アクション"}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": "成長シナリオ（追い風） : "}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": "リスク（向かい風） : "}}]}
+        },
+        {
+            "object": "block",
+            "type": "bulleted_list_item",
+            "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": "自分のアクション : "}}]}
+        }
+    ]
+
+    url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+    requests.patch(url, headers=headers, json={"children": blocks})
+
+def append_notebook_template(page_id, code, info):
+    # 指標データの整形
     price = info.get("currentPrice") or info.get("regularMarketPrice") or "-"
     mcap = info.get("marketCap")
     mcap_str = f"{mcap / 100000000:,.1f} 億円" if mcap else "-"
