@@ -2,8 +2,9 @@ import os
 import requests
 import yfinance as yf
 
-NOTION_TOKEN = os.getenv("NOTION_TOKEN", "ntn_nX464811020bEJSuYhIeUadAjlQmTXDNm6ZqjK20riQ1Hf")
-DATABASE_ID = os.getenv("NOTION_DATABASE_ID", "3d801bb4740c8025b1a8efc2cf1d1595")
+NOTION_TOKEN = os.environ["NOTION_TOKEN"]
+DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
+
 headers = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
     "Content-Type": "application/json",
