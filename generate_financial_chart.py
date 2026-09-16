@@ -175,7 +175,8 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
 
 def sync_pending_images_to_notion(tasks):
     """画像ファイルがGitHubに保存された後にNotionに画像ブロックを追加"""
-    now_ts = int(time.time())
+    # GitHub CDN (jsDelivr) を経由して即時反映させるURL構造
+    # jsDelivrはGitHubコミット直後の画像を高速に配信できます
     
     for task in tasks:
         page_id = task['page_id']
@@ -183,8 +184,8 @@ def sync_pending_images_to_notion(tasks):
         
         children_blocks = []
         for item in chart_list:
-            # キャッシュ回避用タイムスタンプ(?v=...)を付与
-            raw_image_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/{item['rel_path']}?v={now_ts}"
+            # jsDelivr CDNを利用した即時反映URL
+            image_url = f"https://cdn.jsdelivr.net/gh/{GITHUB_REPOSITORY}@main/{item['rel_path']}"
             
             children_blocks.append({
                 "object": "block",
@@ -198,7 +199,7 @@ def sync_pending_images_to_notion(tasks):
                 "type": "image",
                 "image": {
                     "type": "external",
-                    "external": {"url": raw_image_url}
+                    "external": {"url": image_url}
                 }
             })
 
@@ -252,6 +253,10 @@ if __name__ == "__main__":
 
     elif mode == "NOTION_SYNC":
         print("【Phase 2】保存された画像をNotionへ反映中...")
+        # GitHubへのPush反映待ちとして10秒スリープを入れて確実にURLを有効化
+        print("GitHub側の反映を10秒間待機しています...")
+        time.sleep(10)
+        
         companies = get_notion_pages()
         pending_tasks = []
 
