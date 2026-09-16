@@ -1,7 +1,7 @@
 name: Generate Financial Chart
 
 on:
-  workflow_dispatch: # 手動実行用ボタンの有効化
+  workflow_dispatch:
 
 jobs:
   build:
@@ -23,7 +23,7 @@ jobs:
 
     - name: Run Financial Chart Generator
       env:
-        NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+        NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
         NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
         EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
       run: python generate_financial_chart.py
