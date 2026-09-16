@@ -7,16 +7,16 @@ import matplotlib.patches as patches
 import japanize_matplotlib
 from bs4 import BeautifulSoup
 
-# 環境変数
+# 環境変数（Secretsの名称に統一）
 EDINET_API_KEY = os.environ.get("EDINET_API_KEY")
-NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
+NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 
 def get_notion_pages():
     """Notionから登録企業一覧を取得（柔軟なプロパティ判定付き）"""
     url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
     headers = {
-        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Authorization": f"Bearer {NOTION_API_KEY}",
         "Notion-Version": "2022-06-28",
         "Content-Type": "application/json"
     }
@@ -33,15 +33,12 @@ def get_notion_pages():
         name = "不明"
         ticker = None
 
-        # 全プロパティをループして名前と証券コードを探す
         for prop_name, prop_val in props.items():
-            # タイトル（銘柄名・企業名など）の抽出
             if prop_val.get("type") == "title":
                 title_arr = prop_val.get("title", [])
                 if title_arr:
                     name = title_arr[0].get("plain_text", "不明")
             
-            # 証券コード（数値 or テキスト）の抽出
             if "コード" in prop_name or "Ticker" in prop_name or "code" in prop_name.lower():
                 p_type = prop_val.get("type")
                 if p_type == "rich_text":
