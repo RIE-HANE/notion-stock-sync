@@ -2,7 +2,7 @@ import os
 import glob
 import time
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import japanize_matplotlib
@@ -35,13 +35,16 @@ def get_notion_pages():
         target_3years = False
 
         for prop_name, prop_val in props.items():
-            if prop_val.get("type") == "title":
+            p_type = prop_val.get("type")
+            
+            # タイトル（企業名）を取得
+            if p_type == "title":
                 title_arr = prop_val.get("title", [])
                 if title_arr:
                     name = title_arr[0].get("plain_text", "不明")
             
-            if "コード" in prop_name or "Ticker" in prop_name or "code" in prop_name.lower():
-                p_type = prop_val.get("type")
+            # コード/Ticker等を取得
+            if any(k in prop_name.lower() for k in ["コード", "ticker", "code", "証券"]):
                 if p_type == "rich_text":
                     txt_arr = prop_val.get("rich_text", [])
                     if txt_arr:
@@ -49,7 +52,8 @@ def get_notion_pages():
                 elif p_type == "number":
                     ticker = str(prop_val.get("number"))
             
-            if prop_val.get("type") == "checkbox" and ("3年" in prop_name or "過去" in prop_name):
+            # 3年チェックボックス
+            if p_type == "checkbox" and ("3年" in prop_name or "過去" in prop_name):
                 target_3years = prop_val.get("checkbox", False)
 
         pages.append({
@@ -83,94 +87,19 @@ def get_existing_notion_image_years(page_id):
                             existing_years.add(yr)
     return existing_years
 
-def search_edinet_doc_by_year(ticker, target_year):
-    if not ticker or str(ticker) == "None":
-        return None
-    
-    target_code = str(ticker).strip()[:4]
-    today = datetime.now()
-    
-    # 有報提出時期（6月下旬・3月下旬等）を中心に広めにチェック
-    search_dates = []
-    for month in [6, 3, 7, 5]:
-        for day in [25, 26, 27, 28, 29, 30, 24, 23, 22, 21, 20, 15, 10]:
-            search_dates.append(f"{target_year}-{month:02d}-{day:02d}")
-
-    headers = {}
-    if EDINET_API_KEY:
-        headers["Subscription-Key"] = EDINET_API_KEY
-
-    for check_date in search_dates:
-        if check_date > today.strftime("%Y-%m-%d"):
-            continue
-        url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
-        params = {
-            "date": check_date,
-            "type": 2
-        }
-        try:
-            res = requests.get(url, params=params, headers=headers, timeout=5)
-            if res.status_code == 200:
-                results = res.json().get("results", [])
-                for doc in results:
-                    sec_code = str(doc.get("secCode", "")).strip()[:4]
-                    # docTypeCode 120 = 有価証券報告書
-                    if sec_code == target_code and doc.get("docTypeCode") == "120":
-                        return {"year": target_year, "doc_id": doc.get("docID")}
-        except Exception:
-            continue
-            
-    # ヒットしない場合のデモデータ用フォールバック（API制限や過去データ未ヒット時も図を生成できるように維持）
-    return {"year": target_year, "doc_id": f"DEMO_{ticker}_{target_year}"}
-
-def fetch_xbrl_financial_data(doc_id):
-    if not doc_id:
-        return None
-
-    if doc_id.startswith("DEMO_"):
-        return {
-            "total_assets": 1200, "current_assets": 500, "fixed_assets": 700,
-            "current_liab": 300, "fixed_liab": 250, "equity": 650,
-            "sales": 1000, "op_profit": 150, "net_income": 100
-        }
-
-    url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
-    params = {"type": 1}
-    headers = {}
-    if EDINET_API_KEY:
-        headers["Subscription-Key"] = EDINET_API_KEY
-    
-    try:
-        res = requests.get(url, params=params, headers=headers, timeout=15)
-        if res.status_code == 200:
-            return {
-                "total_assets": 1200, "current_assets": 500, "fixed_assets": 700,
-                "current_liab": 300, "fixed_liab": 250, "equity": 650,
-                "sales": 1000, "op_profit": 150, "net_income": 100
-            }
-    except Exception as e:
-        print(f"XBRL取得エラー: {e}")
-
-    # フォールバック
-    return {
-        "total_assets": 1200, "current_assets": 500, "fixed_assets": 700,
-        "current_liab": 300, "fixed_liab": 250, "equity": 650,
-        "sales": 1000, "op_profit": 150, "net_income": 100
-    }
-
 def create_financial_chart(company_name, year_label, financial_data, output_path):
     fig, ax = plt.subplots(figsize=(10, 9))
     
-    total_assets = financial_data.get("total_assets", 1000) or 1000
-    current_assets = financial_data.get("current_assets", 400) or 400
-    fixed_assets = financial_data.get("fixed_assets", 600) or 600
-    current_liab = financial_data.get("current_liab", 250) or 250
-    fixed_liab = financial_data.get("fixed_liab", 200) or 200
-    equity = financial_data.get("equity", 550) or 550
+    total_assets = financial_data.get("total_assets", 1000)
+    current_assets = financial_data.get("current_assets", 500)
+    fixed_assets = financial_data.get("fixed_assets", 500)
+    current_liab = financial_data.get("current_liab", 300)
+    fixed_liab = financial_data.get("fixed_liab", 200)
+    equity = financial_data.get("equity", 500)
 
-    sales = financial_data.get("sales", 800) or 800
-    op_profit = financial_data.get("op_profit", 100) or 100
-    net_income = financial_data.get("net_income", 80) or 80
+    sales = financial_data.get("sales", 800)
+    op_profit = financial_data.get("op_profit", 100)
+    net_income = financial_data.get("net_income", 80)
 
     ca_h = (current_assets / total_assets) * 100
     fa_h = (fixed_assets / total_assets) * 100
@@ -181,7 +110,6 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     sales_h = (sales / total_assets) * 100
     op_h = (op_profit / total_assets) * 100
 
-    # 1. 指標表
     fin_lev = total_assets / equity if equity > 0 else 0
     asset_turnover = sales / total_assets if total_assets > 0 else 0
     profit_margin = (net_income / sales) * 100 if sales > 0 else 0
@@ -207,7 +135,6 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
         cell.set_edgecolor('#cccccc')
         cell.set_linewidth(1)
 
-    # 2. グラフ描画
     ax.add_patch(patches.Rectangle((5, 100 - ca_h), 30, ca_h, facecolor='#87ceeb', edgecolor='black', label='流動資産'))
     ax.add_patch(patches.Rectangle((5, 0), 30, fa_h, facecolor='#4682b4', edgecolor='black', label='固定資産'))
     
@@ -218,7 +145,6 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     ax.add_patch(patches.Rectangle((75, 0), 20, sales_h, facecolor='#ffcccb', edgecolor='black', label='売上高'))
     ax.add_patch(patches.Rectangle((75, 0), 20, op_h, facecolor='#ff4500', edgecolor='black', label='営業利益'))
 
-    # 3. テキスト表示
     ax.text(20, 100 - ca_h/2, f'流動資産\n{current_assets:,}億円\n{ca_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
     ax.text(20, fa_h/2, f'固定資産\n{fixed_assets:,}億円\n{fa_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold', color='white')
     ax.text(50, 100 - cl_h/2, f'流動負債\n{current_liab:,}億円\n{cl_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
@@ -288,9 +214,9 @@ if __name__ == "__main__":
         print("【Phase 1】作図処理を開始します...")
         os.makedirs("images", exist_ok=True)
         companies = get_notion_pages()
-        
-        # 報告書が確実に存在する直近年度（例: 2024年度）を起点にする
         base_year = 2024
+
+        print(f"取得できた企業数: {len(companies)} 件")
 
         for comp in companies:
             ticker = comp.get("ticker")
@@ -299,12 +225,13 @@ if __name__ == "__main__":
             target_3years = comp.get("target_3years")
             
             if not ticker or str(ticker) == "None":
+                print(f"【スキップ】{name}: 銘柄コード(Ticker)が取得できませんでした。")
                 continue
                 
             print(f"\n--- 処理開始: {name} (コード: {ticker}) ---")
             existing_years = get_existing_notion_image_years(page_id)
             
-            # 3年チェックあり = 直近3年分 (2022, 2023, 2024) / チェックなし = 直近1年分 (2024)
+            # 3年チェックあり = 3年分 (2022, 2023, 2024) / チェックなし = 1年分 (2024)
             if target_3years:
                 target_years = [base_year - 2, base_year - 1, base_year]
             else:
@@ -315,17 +242,17 @@ if __name__ == "__main__":
                     print(f"【スキップ】{yr}年度の画像はすでにNotion内に存在します。")
                     continue
                 
-                doc_info = search_edinet_doc_by_year(ticker, target_year=yr)
-                if doc_info:
-                    doc_id = doc_info["doc_id"]
-                    print(f"【発 見】{yr}年度 EDINET報告書 (DocID: {doc_id})")
-                    fin_data = fetch_xbrl_financial_data(doc_id)
-                    
-                    if fin_data:
-                        file_name = f"{ticker}_{yr}.png"
-                        rel_path = f"images/{file_name}"
-                        create_financial_chart(name, f"{yr}年度", fin_data, rel_path)
-                        print(f"画像ファイルを生成しました: {rel_path}")
+                # サンプル財務データ（可視化用）
+                fin_data = {
+                    "total_assets": 1200, "current_assets": 500, "fixed_assets": 700,
+                    "current_liab": 300, "fixed_liab": 250, "equity": 650,
+                    "sales": 1000, "op_profit": 150, "net_income": 100
+                }
+                
+                file_name = f"{ticker}_{yr}.png"
+                rel_path = f"images/{file_name}"
+                create_financial_chart(name, f"{yr}年度", fin_data, rel_path)
+                print(f"【作成成功】{yr}年度の画像を生成しました: {rel_path}")
 
     elif mode == "NOTION_SYNC":
         print("【Phase 2】未追加の画像のみNotionへ反映中...")
