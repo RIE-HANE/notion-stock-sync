@@ -62,7 +62,6 @@ def get_notion_pages():
     return pages
 
 def get_existing_notion_image_years(page_id):
-    """Notionページ内にすでに存在する年度を取得"""
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -131,7 +130,7 @@ def fetch_xbrl_financial_data(doc_id):
             return {
                 "total_assets": 1200, "current_assets": 500, "fixed_assets": 700,
                 "current_liab": 300, "fixed_liab": 250, "equity": 650,
-                "sales": 1000, "op_profit": 150
+                "sales": 1000, "op_profit": 150, "net_income": 100
             }
     except Exception as e:
         print(f"XBRL取得エラー: {e}")
@@ -139,18 +138,56 @@ def fetch_xbrl_financial_data(doc_id):
     return None
 
 def create_financial_chart(company_name, year_label, financial_data, output_path):
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(10, 9))
     
     total_assets = financial_data.get("total_assets", 1000) or 1000
-    ca_h = (financial_data.get("current_assets", 400) / total_assets) * 100
-    fa_h = (financial_data.get("fixed_assets", 600) / total_assets) * 100
-    cl_h = (financial_data.get("current_liab", 250) / total_assets) * 100
-    fl_h = (financial_data.get("fixed_liab", 200) / total_assets) * 100
-    eq_h = (financial_data.get("equity", 550) / total_assets) * 100
+    current_assets = financial_data.get("current_assets", 400) or 400
+    fixed_assets = financial_data.get("fixed_assets", 600) or 600
+    current_liab = financial_data.get("current_liab", 250) or 250
+    fixed_liab = financial_data.get("fixed_liab", 200) or 200
+    equity = financial_data.get("equity", 550) or 550
 
-    sales_h = (financial_data.get("sales", 800) / total_assets) * 100
-    op_h = (financial_data.get("op_profit", 100) / total_assets) * 100
+    sales = financial_data.get("sales", 800) or 800
+    op_profit = financial_data.get("op_profit", 100) or 100
+    net_income = financial_data.get("net_income", 80) or 80
 
+    # 割合の計算 (%)
+    ca_h = (current_assets / total_assets) * 100
+    fa_h = (fixed_assets / total_assets) * 100
+    cl_h = (current_liab / total_assets) * 100
+    fl_h = (fixed_liab / total_assets) * 100
+    eq_h = (equity / total_assets) * 100
+
+    sales_h = (sales / total_assets) * 100
+    op_h = (op_profit / total_assets) * 100
+
+    # --- 1. 上部の指標表（デュポン分析4指標）---
+    fin_lev = total_assets / equity if equity > 0 else 0
+    asset_turnover = sales / total_assets if total_assets > 0 else 0
+    profit_margin = (net_income / sales) * 100 if sales > 0 else 0
+    roe = (net_income / equity) * 100 if equity > 0 else 0
+
+    table_data = [
+        ["ROE", f"{roe:.1f}%"],
+        ["財務レバレッジ", f"{fin_lev:.2f}"],
+        ["総資本回転率", f"{asset_turnover:.2f}"],
+        ["当期純利益率", f"{profit_margin:.1f}%"]
+    ]
+
+    table = ax.table(
+        cellText=table_data,
+        colWidths=[0.22, 0.18],
+        loc='upper left',
+        bbox=[0.05, 0.78, 0.32, 0.18]
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+
+    for cell in table.get_celld().values():
+        cell.set_edgecolor('#cccccc')
+        cell.set_linewidth(1)
+
+    # --- 2. グラフ描画 ---
     # 資産（左柱）
     ax.add_patch(patches.Rectangle((5, 100 - ca_h), 30, ca_h, facecolor='#87ceeb', edgecolor='black', label='流動資産'))
     ax.add_patch(patches.Rectangle((5, 0), 30, fa_h, facecolor='#4682b4', edgecolor='black', label='固定資産'))
@@ -190,8 +227,6 @@ def sync_pending_images_to_notion(tasks):
     for task in tasks:
         page_id = task['page_id']
         chart_list = task['chart_list']
-        
-        # ★年度の古い順（2024 -> 2025 -> 2026）にソート★
         chart_list = sorted(chart_list, key=lambda x: x['year'])
         
         children_blocks = []
@@ -250,7 +285,6 @@ if __name__ == "__main__":
             print(f"\n--- 処理開始: {name} (コード: {ticker}) ---")
             existing_years = get_existing_notion_image_years(page_id)
             
-            # ★生成対象の年度も古い順（例: [2024, 2025, 2026]）に整列★
             if target_3years:
                 target_years = [current_year - 2, current_year - 1, current_year]
             else:
@@ -299,7 +333,6 @@ if __name__ == "__main__":
                     continue
 
             if chart_list:
-                # ★追加前にも念のため古い順へソート★
                 chart_list = sorted(chart_list, key=lambda x: x['year'])
                 pending_tasks.append({"page_id": page_id, "chart_list": chart_list})
 
