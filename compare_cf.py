@@ -3,6 +3,7 @@ import glob
 import time
 import requests
 import matplotlib.pyplot as plt
+import japanize_matplotlib
 
 # 環境変数
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
