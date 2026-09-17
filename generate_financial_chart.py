@@ -93,17 +93,20 @@ def search_edinet_doc_by_year(ticker, target_year):
     search_dates = [f"{target_year}-06-{day:02d}" for day in range(20, 31)]
     search_dates += [f"{target_year}-03-{day:02d}" for day in range(20, 31)]
     
+    headers = {}
+    if EDINET_API_KEY:
+        headers["Subscription-Key"] = EDINET_API_KEY
+
     for check_date in search_dates:
         if check_date > today.strftime("%Y-%m-%d"):
             continue
         url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
         params = {
             "date": check_date,
-            "type": 2,
-            "Subscription-Key": EDINET_API_KEY
+            "type": 2
         }
         try:
-            res = requests.get(url, params=params, timeout=3)
+            res = requests.get(url, params=params, headers=headers, timeout=5)
             if res.status_code == 200:
                 results = res.json().get("results", [])
                 for doc in results:
@@ -119,13 +122,13 @@ def fetch_xbrl_financial_data(doc_id):
         return None
 
     url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
-    params = {
-        "type": 1,
-        "Subscription-Key": EDINET_API_KEY
-    }
+    params = {"type": 1}
+    headers = {}
+    if EDINET_API_KEY:
+        headers["Subscription-Key"] = EDINET_API_KEY
     
     try:
-        res = requests.get(url, params=params, timeout=15)
+        res = requests.get(url, params=params, headers=headers, timeout=15)
         if res.status_code == 200:
             return {
                 "total_assets": 1200, "current_assets": 500, "fixed_assets": 700,
@@ -151,7 +154,6 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     op_profit = financial_data.get("op_profit", 100) or 100
     net_income = financial_data.get("net_income", 80) or 80
 
-    # 割合の計算 (%)
     ca_h = (current_assets / total_assets) * 100
     fa_h = (fixed_assets / total_assets) * 100
     cl_h = (current_liab / total_assets) * 100
@@ -161,7 +163,7 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     sales_h = (sales / total_assets) * 100
     op_h = (op_profit / total_assets) * 100
 
-    # --- 1. 上部の指標表（デュポン分析4指標）---
+    # 1. デュポン分析 4指標表
     fin_lev = total_assets / equity if equity > 0 else 0
     asset_turnover = sales / total_assets if total_assets > 0 else 0
     profit_margin = (net_income / sales) * 100 if sales > 0 else 0
@@ -187,29 +189,27 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
         cell.set_edgecolor('#cccccc')
         cell.set_linewidth(1)
 
-    # --- 2. グラフ描画 ---
-    # 資産（左柱）
+    # 2. グラフ描画
     ax.add_patch(patches.Rectangle((5, 100 - ca_h), 30, ca_h, facecolor='#87ceeb', edgecolor='black', label='流動資産'))
     ax.add_patch(patches.Rectangle((5, 0), 30, fa_h, facecolor='#4682b4', edgecolor='black', label='固定資産'))
     
-    # 負債・純資産（中柱）
     ax.add_patch(patches.Rectangle((35, 100 - cl_h), 30, cl_h, facecolor='#f08080', edgecolor='black', label='流動負債'))
     ax.add_patch(patches.Rectangle((35, 100 - cl_h - fl_h), 30, fl_h, facecolor='#cd5c5c', edgecolor='black', label='固定負債'))
     ax.add_patch(patches.Rectangle((35, 0), 30, eq_h, facecolor='#90ee90', edgecolor='black', label='純資産'))
 
-    # 損益（右柱）
     ax.add_patch(patches.Rectangle((75, 0), 20, sales_h, facecolor='#ffcccb', edgecolor='black', label='売上高'))
     ax.add_patch(patches.Rectangle((75, 0), 20, op_h, facecolor='#ff4500', edgecolor='black', label='営業利益'))
 
-    # 文字入れ
-    ax.text(20, 100 - ca_h/2, '流動資産', ha='center', va='center', fontsize=11, fontweight='bold')
-    ax.text(20, fa_h/2, '固定資産', ha='center', va='center', fontsize=11, fontweight='bold', color='white')
-    ax.text(50, 100 - cl_h/2, '流動負債', ha='center', va='center', fontsize=11, fontweight='bold')
-    ax.text(50, 100 - cl_h - fl_h/2, '固定負債', ha='center', va='center', fontsize=11, fontweight='bold', color='white')
-    ax.text(50, eq_h/2, '純資産', ha='center', va='center', fontsize=11, fontweight='bold')
-    ax.text(85, sales_h + 3, '売上高', ha='center', va='bottom', fontsize=11, fontweight='bold')
+    # 3. テキスト表示（金額・割合）
+    ax.text(20, 100 - ca_h/2, f'流動資産\n{current_assets:,}億円\n{ca_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
+    ax.text(20, fa_h/2, f'固定資産\n{fixed_assets:,}億円\n{fa_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold', color='white')
+    ax.text(50, 100 - cl_h/2, f'流動負債\n{current_liab:,}億円\n{cl_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
+    ax.text(50, 100 - cl_h - fl_h/2, f'固定負債\n{fixed_liab:,}億円\n{fl_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold', color='white')
+    ax.text(50, eq_h/2, f'純資産\n{equity:,}億円\n{eq_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
+    ax.text(85, sales_h + 3, f'売上高\n{sales:,}億円', ha='center', va='bottom', fontsize=9, fontweight='bold')
+    
     if op_h > 5:
-        ax.text(85, op_h/2, '営業利益', ha='center', va='center', fontsize=10, fontweight='bold', color='white')
+        ax.text(85, op_h/2, f'営業利益\n{op_profit:,}億円\n{(op_profit/sales*100):.1f}%', ha='center', va='center', fontsize=8, fontweight='bold', color='white')
 
     ax.legend(loc='upper right', bbox_to_anchor=(1.35, 1), fontsize=10, frameon=True)
 
@@ -226,8 +226,7 @@ def sync_pending_images_to_notion(tasks):
     now_ts = int(time.time())
     for task in tasks:
         page_id = task['page_id']
-        chart_list = task['chart_list']
-        chart_list = sorted(chart_list, key=lambda x: x['year'])
+        chart_list = sorted(task['chart_list'], key=lambda x: x['year'])
         
         children_blocks = []
         for item in chart_list:
@@ -285,10 +284,11 @@ if __name__ == "__main__":
             print(f"\n--- 処理開始: {name} (コード: {ticker}) ---")
             existing_years = get_existing_notion_image_years(page_id)
             
+            # 3年チェックあり = 直近3年分 / チェックなし = 直近1年分のみ
             if target_3years:
                 target_years = [current_year - 2, current_year - 1, current_year]
             else:
-                target_years = [current_year - 1, current_year]
+                target_years = [current_year - 1]
 
             for yr in target_years:
                 if yr in existing_years:
