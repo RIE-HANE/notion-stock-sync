@@ -122,11 +122,12 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
         ["当期純利益率", f"{profit_margin:.1f}%"]
     ]
 
+    # 指標表をグラフの右側（凡例の下）に配置
     table = ax.table(
         cellText=table_data,
-        colWidths=[0.22, 0.18],
-        loc='upper left',
-        bbox=[0.05, 0.78, 0.32, 0.18]
+        colWidths=[0.25, 0.20],
+        loc='upper right',
+        bbox=[1.10, 0.25, 0.45, 0.25]
     )
     table.auto_set_font_size(False)
     table.set_fontsize(10)
@@ -135,6 +136,7 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
         cell.set_edgecolor('#cccccc')
         cell.set_linewidth(1)
 
+    # グラフの四角形を追加
     ax.add_patch(patches.Rectangle((5, 100 - ca_h), 30, ca_h, facecolor='#87ceeb', edgecolor='black', label='流動資産'))
     ax.add_patch(patches.Rectangle((5, 0), 30, fa_h, facecolor='#4682b4', edgecolor='black', label='固定資産'))
     
@@ -145,6 +147,7 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     ax.add_patch(patches.Rectangle((75, 0), 20, sales_h, facecolor='#ffcccb', edgecolor='black', label='売上高'))
     ax.add_patch(patches.Rectangle((75, 0), 20, op_h, facecolor='#ff4500', edgecolor='black', label='営業利益'))
 
+    # テキストラベル
     ax.text(20, 100 - ca_h/2, f'流動資産\n{current_assets:,}億円\n{ca_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
     ax.text(20, fa_h/2, f'固定資産\n{fixed_assets:,}億円\n{fa_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold', color='white')
     ax.text(50, 100 - cl_h/2, f'流動負債\n{current_liab:,}億円\n{cl_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
@@ -155,6 +158,7 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     if op_h > 5:
         ax.text(85, op_h/2, f'営業利益\n{op_profit:,}億円\n{(op_profit/sales*100):.1f}%', ha='center', va='center', fontsize=8, fontweight='bold', color='white')
 
+    # 凡例の配置
     ax.legend(loc='upper right', bbox_to_anchor=(1.35, 1), fontsize=10, frameon=True)
 
     ax.set_xlim(0, 110)
@@ -242,7 +246,7 @@ if __name__ == "__main__":
                     print(f"【スキップ】{yr}年度の画像はすでにNotion内に存在します。")
                     continue
                 
-                # サンプル財務データ（可視化用）
+                # サンプル財務データ
                 fin_data = {
                     "total_assets": 1200, "current_assets": 500, "fixed_assets": 700,
                     "current_liab": 300, "fixed_liab": 250, "equity": 650,
