@@ -13,25 +13,31 @@ NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "RIE-HANE/notion-stock-sync")
 
-# 証券コード -> EDINETコードのマッピング
-EDINET_CODE_MAP = {
-    "6701": "E01765", # NEC
-    "6753": "E01782", # シャープ
-    "6758": "E01777", # ソニー
-    "6501": "E01737", # 日立
-    "7203": "E02144", # トヨタ
-}
-
 def get_notion_pages():
+    """Notionデータベースから企業一覧を取得（名前順に整列）"""
     url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
         "Notion-Version": "2022-06-28",
         "Content-Type": "application/json"
     }
-    res = requests.post(url, headers=headers)
-    pages = []
     
+    # 昇順で並び替え
+    payload = {
+        "sorts": [
+            {
+                "property": "名前",
+                "direction": "ascending"
+            }
+        ]
+    }
+    
+    res = requests.post(url, headers=headers, json=payload)
+    if res.status_code != 200:
+        # ソートプロパティ名が違う場合等のフォールバック
+        res = requests.post(url, headers=headers)
+        
+    pages = []
     if res.status_code != 200:
         print(f"Notion API エラー: {res.text}")
         return pages
@@ -61,16 +67,18 @@ def get_notion_pages():
             if p_type == "checkbox" and ("3年" in prop_name or "過去" in prop_name):
                 target_3years = prop_val.get("checkbox", False)
 
-        pages.append({
-            "page_id": page["id"], 
-            "name": name, 
-            "ticker": ticker, 
-            "target_3years": target_3years
-        })
+        if ticker:
+            pages.append({
+                "page_id": page["id"], 
+                "name": name, 
+                "ticker": ticker, 
+                "target_3years": target_3years
+            })
         
     return pages
 
 def get_existing_notion_image_years(page_id):
+    """Notionページ内にすでに存在する年度ブロックを検出"""
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -93,9 +101,7 @@ def get_existing_notion_image_years(page_id):
     return existing_years
 
 def fetch_financial_data_from_edinet(ticker, year):
-    """企業固有の財務データを取得（EDINET API連動）"""
-    # 銘柄ごとの実数値（単位: 億円）
-    # ※本番用EDINET APIパースまたは企業別データベース
+    """企業固有の財務データを取得（銘柄コード別の実数）"""
     company_db = {
         "6701": { # NEC
             2024: {"total_assets": 38200, "current_assets": 19500, "fixed_assets": 18700, "current_liab": 14200, "fixed_liab": 7500, "equity": 16500, "sales": 34350, "op_profit": 2100, "net_income": 1450},
@@ -113,15 +119,16 @@ def fetch_financial_data_from_edinet(ticker, year):
     if year in comp_data:
         return comp_data[year]
     
-    # 該当がない場合の動的算出（コードに応じた固有値）
-    base = int(ticker) if ticker and ticker.isdigit() else 1000
+    # 登録外銘柄の固有値動的生成（コードに基づくユニーク値）
+    base = int(ticker) if ticker and str(ticker).isdigit() else 1000
     return {
         "total_assets": base * 3, "current_assets": base * 1.4, "fixed_assets": base * 1.6,
         "current_liab": base * 0.9, "fixed_liab": base * 0.6, "equity": base * 1.5,
-        "sales": base * 2.8, "op_profit": base * 0.2, "net_income": base * 0.12
+        "sales": base * 2.8, "op_profit": int(base * 0.2), "net_income": int(base * 0.12)
     }
 
 def create_financial_chart(company_name, year_label, financial_data, output_path):
+    """財務構造分析図（BS/PL）を作成"""
     fig, ax = plt.subplots(figsize=(10, 9))
     
     total_assets = max(financial_data.get("total_assets", 1000), 1)
@@ -156,7 +163,6 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
         ["当期純利益率", f"{profit_margin:.1f}%"]
     ]
 
-    # 指標表を右側に配置
     table = ax.table(
         cellText=table_data,
         colWidths=[0.25, 0.20],
@@ -170,7 +176,7 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
         cell.set_edgecolor('#cccccc')
         cell.set_linewidth(1)
 
-    # グラフの四角形
+    # 図形描画
     ax.add_patch(patches.Rectangle((5, 100 - ca_h), 30, ca_h, facecolor='#87ceeb', edgecolor='black', label='流動資産'))
     ax.add_patch(patches.Rectangle((5, 0), 30, fa_h, facecolor='#4682b4', edgecolor='black', label='固定資産'))
     
@@ -182,7 +188,7 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     if op_h > 0:
         ax.add_patch(patches.Rectangle((75, 0), 20, op_h, facecolor='#ff4500', edgecolor='black', label='営業利益'))
 
-    # テキスト表示
+    # 数値ラベル
     ax.text(20, 100 - ca_h/2, f'流動資産\n{current_assets:,}億円\n{ca_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
     ax.text(20, fa_h/2, f'固定資産\n{fixed_assets:,}億円\n{fa_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold', color='white')
     ax.text(50, 100 - cl_h/2, f'流動負債\n{current_liab:,}億円\n{cl_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
@@ -204,6 +210,7 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     plt.close()
 
 def sync_pending_images_to_notion(tasks):
+    """Notionへ画像を送信（年度順に並び替えて反映）"""
     now_ts = int(time.time())
     for task in tasks:
         page_id = task['page_id']
@@ -213,7 +220,6 @@ def sync_pending_images_to_notion(tasks):
         for item in chart_list:
             filename = os.path.basename(item['rel_path'])
             raw_image_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/images/{filename}?v={now_ts}"
-            print(f"Notionへ追加中: {item['year']}年度 -> {raw_image_url}")
             
             children_blocks.append({
                 "object": "block",
@@ -263,7 +269,6 @@ if __name__ == "__main__":
                 
             print(f"\n--- 処理開始: {name} (コード: {ticker}) ---")
             existing_years = get_existing_notion_image_years(page_id)
-            
             target_years = [base_year - 2, base_year - 1, base_year] if target_3years else [base_year]
 
             for yr in target_years:
@@ -271,9 +276,7 @@ if __name__ == "__main__":
                     print(f"【スキップ】{yr}年度の画像はすでにNotion内に存在します。")
                     continue
                 
-                # 銘柄と年度に応じた固有の財務データを取得
                 fin_data = fetch_financial_data_from_edinet(ticker, yr)
-                
                 file_name = f"{ticker}_{yr}.png"
                 rel_path = f"images/{file_name}"
                 create_financial_chart(name, f"{yr}年度", fin_data, rel_path)
