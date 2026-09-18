@@ -92,6 +92,24 @@ def get_existing_notion_image_years(page_id):
     return existing_years
 
 
+def get_latest_year_for_ticker(ticker):
+    """DBに保存されている該当企業の最新年度（MAX年）を動的に取得"""
+    if os.path.exists(DB_FILE):
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT MAX(year) FROM financial_metrics WHERE ticker = ?",
+            (str(ticker).strip(),)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row and row[0] is not None:
+            return int(row[0])
+    
+    # DBに該当データがない場合のフォールバック（前年）
+    return datetime.now().year - 1
+
+
 def fetch_financial_data(ticker, year):
     """
     SQLデータベースから 'ticker' と 'year' の実データを取得。
@@ -124,7 +142,6 @@ def fetch_financial_data(ticker, year):
                 "net_income": row[8],
             }
 
-    # DBにデータがない場合はダミーを作らず None を返す
     return None
 
 
@@ -265,7 +282,6 @@ if __name__ == "__main__":
         print("【Phase 1】作図処理を開始します...")
         os.makedirs("images", exist_ok=True)
         companies = get_notion_pages()
-        base_year = 2024
 
         for comp in companies:
             ticker = comp.get("ticker")
@@ -278,7 +294,12 @@ if __name__ == "__main__":
                 
             print(f"\n--- 処理開始: {name} (コード: {ticker}) ---")
             existing_years = get_existing_notion_image_years(page_id)
-            target_years = [base_year - 2, base_year - 1, base_year] if target_3years else [base_year]
+            
+            # ★ 企業ごとにDBから最新年度を取得（決算月に依存しない設計）
+            latest_year = get_latest_year_for_ticker(ticker)
+            
+            # 3年フラグに応じて対象年度を判定
+            target_years = [latest_year - 2, latest_year - 1, latest_year] if target_3years else [latest_year]
 
             for yr in target_years:
                 if yr in existing_years:
@@ -287,7 +308,6 @@ if __name__ == "__main__":
                 
                 fin_data = fetch_financial_data(ticker, yr)
                 
-                # DBにデータがない場合は画像生成を行わず安全にスキップ
                 if not fin_data:
                     print(f"【スキップ】{name} ({ticker}) の {yr}年度データがDBに見つかりません。")
                     continue
