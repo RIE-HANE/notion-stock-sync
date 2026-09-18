@@ -1,49 +1,60 @@
-name: Generate Financial Chart
+name: Generate Financial Chart & Sync
 
 on:
-  schedule:
-    - cron: '0 21 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # ボタン1クリックで手動実行
+  # （必要に応じて schedule や push などのトリガーを設定）
 
 jobs:
-  sync:
+  build-and-sync:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Code
+      - name: リポジトリのチェックアウト
         uses: actions/checkout@v3
 
-      - name: Set up Python
+      - name: Python のセットアップ
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+          cache: 'pip'
 
-      - name: Install dependencies
+      - name: 依存ライブラリのインストール
         run: |
-          pip install requests matplotlib japanize-matplotlib beautifulsoup4
+          python -m pip install --upgrade pip
+          pip install requests matplotlib japanize-matplotlib
 
-      - name: Step 1 - Generate Charts
-        env:
-          EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
-          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          SYNC_MODE: "GENERATE"
-        run: python generate_financial_chart.py
+      # --- 1. DBのセットアップ（setup_db.py の実行） ---
+      - name: Step 1 - SQLite DBのセットアップ
+        run: python setup_db.py
 
-      - name: Step 2 - Commit & Push Images to GitHub
+      # --- 2. 作成された DB を Git に保存（コミット＆プッシュ） ---
+      - name: Step 2 - DBファイルのコミットとプッシュ
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git pull origin main
-          git add images/
-          git commit -m "Add financial chart images [skip ci]" || echo "No changes to commit"
+          git add financial_data.db
+          git commit -m "Chore: Update financial_data.db" || echo "No DB changes to commit"
           git push
 
-      - name: Step 3 - Sync Images to Notion
+      # --- 3. 財務構造図の生成 (Phase 1) ---
+      - name: Step 3 - 財務図の生成
         env:
-          EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          SYNC_MODE: "GENERATE"
+        run: python generate_financial_chart.py
+
+      # --- 4. 生成された画像ファイルを Git に保存 ---
+      - name: Step 4 - 生成画像のコミットとプッシュ
+        run: |
+          git add images/
+          git commit -m "Feat: Add generated financial charts" || echo "No images to commit"
+          git push
+
+      # --- 5. Notion ページへの画像同期 (Phase 2) ---
+      - name: Step 5 - Notionへの画像同期
+        env:
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           SYNC_MODE: "NOTION_SYNC"
         run: python generate_financial_chart.py
