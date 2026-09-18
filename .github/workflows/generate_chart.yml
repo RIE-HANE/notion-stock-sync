@@ -21,7 +21,7 @@ jobs:
       - name: 依存ライブラリのインストール
         run: |
           python -m pip install --upgrade pip
-          pip install requests matplotlib japanize-matplotlib
+          pip install requests matplotlib japanize-matplotlib edinet-python
 
       # --- 1. DBのセットアップ（setup_db.py の実行） ---
       - name: Step 1 - SQLite DBのセットアップ
