@@ -94,14 +94,13 @@ def get_existing_notion_image_years(page_id):
 
 def fetch_financial_data(ticker, year):
     """
-    SQLデータベースから渡された 'ticker' と 'year' の動的変数で検索して取得。
-    特定の銘柄コード（6702等）はコード内に一切ベタ打ちしません。
+    SQLデータベースから 'ticker' と 'year' の実データを取得。
+    EDINETから取得した実データが存在しない場合は None を返します。
     """
     if os.path.exists(DB_FILE):
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         
-        # 変数 ticker / year をプレースホルダーにバインドして検索
         cursor.execute('''
             SELECT total_assets, current_assets, fixed_assets, current_liab, 
                    fixed_liab, equity, sales, op_profit, net_income
@@ -125,35 +124,24 @@ def fetch_financial_data(ticker, year):
                 "net_income": row[8],
             }
 
-    # DBに対象銘柄のデータがない場合：ticker（証券コード数値）から動的フォールバック計算
-    base = int(ticker) if ticker and str(ticker).isdigit() else 1000
-    return {
-        "total_assets": base * 3.5, 
-        "current_assets": base * 1.8, 
-        "fixed_assets": base * 1.7,
-        "current_liab": base * 1.1, 
-        "fixed_liab": base * 0.5, 
-        "equity": base * 1.9,
-        "sales": base * 4.0, 
-        "op_profit": int(base * 0.25), 
-        "net_income": int(base * 0.15)
-    }
+    # DBにデータがない場合はダミーを作らず None を返す
+    return None
 
 
 def create_financial_chart(company_name, year_label, financial_data, output_path):
-    """財務構造分析図（BS/PL）を作成（動的数値に基づいた描画）"""
+    """財務構造分析図（BS/PL）を作成（実数値に基づいた描画）"""
     fig, ax = plt.subplots(figsize=(10, 9))
     
     total_assets = max(financial_data.get("total_assets", 1000), 1)
-    current_assets = financial_data.get("current_assets", 500)
-    fixed_assets = financial_data.get("fixed_assets", 500)
-    current_liab = financial_data.get("current_liab", 300)
-    fixed_liab = financial_data.get("fixed_liab", 200)
-    equity = financial_data.get("equity", 500)
+    current_assets = financial_data.get("current_assets", 0)
+    fixed_assets = financial_data.get("fixed_assets", 0)
+    current_liab = financial_data.get("current_liab", 0)
+    fixed_liab = financial_data.get("fixed_liab", 0)
+    equity = financial_data.get("equity", 0)
 
-    sales = financial_data.get("sales", 800)
-    op_profit = financial_data.get("op_profit", 100)
-    net_income = financial_data.get("net_income", 80)
+    sales = financial_data.get("sales", 0)
+    op_profit = financial_data.get("op_profit", 0)
+    net_income = financial_data.get("net_income", 0)
 
     # 構成比（%）の計算
     ca_h = (current_assets / total_assets) * 100
@@ -280,7 +268,6 @@ if __name__ == "__main__":
         base_year = 2024
 
         for comp in companies:
-            # 変数として動的読み込み（特定の企業コードに依存しない）
             ticker = comp.get("ticker")
             name = comp.get("name")
             page_id = comp.get("page_id")
@@ -298,8 +285,13 @@ if __name__ == "__main__":
                     print(f"【スキップ】{yr}年度の画像はすでにNotion内に存在します。")
                     continue
                 
-                # 動的な ticker と yr を引数で渡してデータを検索・取得
                 fin_data = fetch_financial_data(ticker, yr)
+                
+                # DBにデータがない場合は画像生成を行わず安全にスキップ
+                if not fin_data:
+                    print(f"【スキップ】{name} ({ticker}) の {yr}年度データがDBに見つかりません。")
+                    continue
+
                 file_name = f"{ticker}_{yr}.png"
                 rel_path = f"images/{file_name}"
                 create_financial_chart(name, f"{yr}年度", fin_data, rel_path)
