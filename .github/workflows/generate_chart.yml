@@ -25,6 +25,9 @@ jobs:
 
       # --- 1. DBのセットアップ（setup_db.py の実行） ---
       - name: Step 1 - SQLite DBのセットアップ
+        env:
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
         run: python setup_db.py
 
       # --- 2. 作成された DB を Git に保存（コミット＆プッシュ） ---
