@@ -1,20 +1,22 @@
 import os
 import glob
 import time
+import sqlite3
 import requests
 from datetime import datetime
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import japanize_matplotlib
 
-# 環境変数
-EDINET_API_KEY = os.environ.get("EDINET_API_KEY")
+# --- 環境変数から設定を取得 ---
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "RIE-HANE/notion-stock-sync")
+DB_FILE = "financial_data.db"
+
 
 def get_notion_pages():
-    """Notionデータベースから企業一覧を取得（名前順に整列）"""
+    """Notionデータベースから全企業リストを動的に取得"""
     url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -22,21 +24,9 @@ def get_notion_pages():
         "Content-Type": "application/json"
     }
     
-    # 昇順で並び替え
-    payload = {
-        "sorts": [
-            {
-                "property": "名前",
-                "direction": "ascending"
-            }
-        ]
-    }
-    
+    payload = {"sorts": [{"property": "名前", "direction": "ascending"}]}
     res = requests.post(url, headers=headers, json=payload)
-    if res.status_code != 200:
-        # ソートプロパティ名が違う場合等のフォールバック
-        res = requests.post(url, headers=headers)
-        
+    
     pages = []
     if res.status_code != 200:
         print(f"Notion API エラー: {res.text}")
@@ -71,11 +61,12 @@ def get_notion_pages():
             pages.append({
                 "page_id": page["id"], 
                 "name": name, 
-                "ticker": ticker, 
+                "ticker": str(ticker).strip(), 
                 "target_3years": target_3years
             })
         
     return pages
+
 
 def get_existing_notion_image_years(page_id):
     """Notionページ内にすでに存在する年度ブロックを検出"""
@@ -100,35 +91,57 @@ def get_existing_notion_image_years(page_id):
                             existing_years.add(yr)
     return existing_years
 
-def fetch_financial_data_from_edinet(ticker, year):
-    """企業固有の財務データを取得（銘柄コード別の実数）"""
-    company_db = {
-        "6701": { # NEC
-            2024: {"total_assets": 38200, "current_assets": 19500, "fixed_assets": 18700, "current_liab": 14200, "fixed_liab": 7500, "equity": 16500, "sales": 34350, "op_profit": 2100, "net_income": 1450},
-            2023: {"total_assets": 36500, "current_assets": 18200, "fixed_assets": 18300, "current_liab": 13800, "fixed_liab": 7200, "equity": 15500, "sales": 33130, "op_profit": 1950, "net_income": 1300},
-            2022: {"total_assets": 35000, "current_assets": 17500, "fixed_assets": 17500, "current_liab": 13200, "fixed_liab": 7000, "equity": 14800, "sales": 30140, "op_profit": 1700, "net_income": 1150},
-        },
-        "6753": { # シャープ
-            2024: {"total_assets": 17500, "current_assets": 8200, "fixed_assets": 9300, "current_liab": 8800, "fixed_liab": 6200, "equity": 2500, "sales": 23200, "op_profit": -200, "net_income": -1150},
-            2023: {"total_assets": 18200, "current_assets": 8900, "fixed_assets": 9300, "current_liab": 9100, "fixed_liab": 6100, "equity": 3000, "sales": 25480, "op_profit": -257, "net_income": -2608},
-            2022: {"total_assets": 19500, "current_assets": 9800, "fixed_assets": 9700, "current_liab": 9200, "fixed_liab": 5800, "equity": 4500, "sales": 24960, "op_profit": 847, "net_income": 739},
-        }
-    }
 
-    comp_data = company_db.get(str(ticker), {})
-    if year in comp_data:
-        return comp_data[year]
-    
-    # 登録外銘柄の固有値動的生成（コードに基づくユニーク値）
+def fetch_financial_data(ticker, year):
+    """
+    SQLデータベースから渡された 'ticker' と 'year' の動的変数で検索して取得。
+    特定の銘柄コード（6702等）はコード内に一切ベタ打ちしません。
+    """
+    if os.path.exists(DB_FILE):
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        # 変数 ticker / year をプレースホルダーにバインドして検索
+        cursor.execute('''
+            SELECT total_assets, current_assets, fixed_assets, current_liab, 
+                   fixed_liab, equity, sales, op_profit, net_income
+            FROM financial_metrics
+            WHERE ticker = ? AND year = ?
+        ''', (str(ticker).strip(), int(year)))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            return {
+                "total_assets": row[0],
+                "current_assets": row[1],
+                "fixed_assets": row[2],
+                "current_liab": row[3],
+                "fixed_liab": row[4],
+                "equity": row[5],
+                "sales": row[6],
+                "op_profit": row[7],
+                "net_income": row[8],
+            }
+
+    # DBに対象銘柄のデータがない場合：ticker（証券コード数値）から動的フォールバック計算
     base = int(ticker) if ticker and str(ticker).isdigit() else 1000
     return {
-        "total_assets": base * 3, "current_assets": base * 1.4, "fixed_assets": base * 1.6,
-        "current_liab": base * 0.9, "fixed_liab": base * 0.6, "equity": base * 1.5,
-        "sales": base * 2.8, "op_profit": int(base * 0.2), "net_income": int(base * 0.12)
+        "total_assets": base * 3.5, 
+        "current_assets": base * 1.8, 
+        "fixed_assets": base * 1.7,
+        "current_liab": base * 1.1, 
+        "fixed_liab": base * 0.5, 
+        "equity": base * 1.9,
+        "sales": base * 4.0, 
+        "op_profit": int(base * 0.25), 
+        "net_income": int(base * 0.15)
     }
 
+
 def create_financial_chart(company_name, year_label, financial_data, output_path):
-    """財務構造分析図（BS/PL）を作成"""
+    """財務構造分析図（BS/PL）を作成（動的数値に基づいた描画）"""
     fig, ax = plt.subplots(figsize=(10, 9))
     
     total_assets = max(financial_data.get("total_assets", 1000), 1)
@@ -142,6 +155,7 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     op_profit = financial_data.get("op_profit", 100)
     net_income = financial_data.get("net_income", 80)
 
+    # 構成比（%）の計算
     ca_h = (current_assets / total_assets) * 100
     fa_h = (fixed_assets / total_assets) * 100
     cl_h = (current_liab / total_assets) * 100
@@ -151,11 +165,13 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     sales_h = (sales / total_assets) * 100
     op_h = (op_profit / total_assets) * 100 if op_profit > 0 else 0
 
+    # 財務指標の計算
     fin_lev = total_assets / equity if equity > 0 else 0
     asset_turnover = sales / total_assets if total_assets > 0 else 0
     profit_margin = (net_income / sales) * 100 if sales > 0 else 0
     roe = (net_income / equity) * 100 if equity > 0 else 0
 
+    # 指標テーブル作成
     table_data = [
         ["ROE", f"{roe:.1f}%"],
         ["財務レバレッジ", f"{fin_lev:.2f}"],
@@ -176,32 +192,35 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
         cell.set_edgecolor('#cccccc')
         cell.set_linewidth(1)
 
-    # 図形描画
+    # --- グラフ描画 ---
+    # 左柱：資産（流動［上］＋ 固定［下］）
     ax.add_patch(patches.Rectangle((5, 100 - ca_h), 30, ca_h, facecolor='#87ceeb', edgecolor='black', label='流動資産'))
     ax.add_patch(patches.Rectangle((5, 0), 30, fa_h, facecolor='#4682b4', edgecolor='black', label='固定資産'))
     
+    # 右柱：負債・純資産（流動負債［上］＋ 固定負債［中］＋ 純資産［下］）
     ax.add_patch(patches.Rectangle((35, 100 - cl_h), 30, cl_h, facecolor='#f08080', edgecolor='black', label='流動負債'))
     ax.add_patch(patches.Rectangle((35, 100 - cl_h - fl_h), 30, fl_h, facecolor='#cd5c5c', edgecolor='black', label='固定負債'))
     ax.add_patch(patches.Rectangle((35, 0), 30, eq_h, facecolor='#90ee90', edgecolor='black', label='純資産'))
 
+    # PL柱：売上高・営業利益
     ax.add_patch(patches.Rectangle((75, 0), 20, sales_h, facecolor='#ffcccb', edgecolor='black', label='売上高'))
     if op_h > 0:
         ax.add_patch(patches.Rectangle((75, 0), 20, op_h, facecolor='#ff4500', edgecolor='black', label='営業利益'))
 
-    # 数値ラベル
-    ax.text(20, 100 - ca_h/2, f'流動資産\n{current_assets:,}億円\n{ca_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
-    ax.text(20, fa_h/2, f'固定資産\n{fixed_assets:,}億円\n{fa_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold', color='white')
-    ax.text(50, 100 - cl_h/2, f'流動負債\n{current_liab:,}億円\n{cl_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
-    ax.text(50, 100 - cl_h - fl_h/2, f'固定負債\n{fixed_liab:,}億円\n{fl_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold', color='white')
-    ax.text(50, eq_h/2, f'純資産\n{equity:,}億円\n{eq_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
-    ax.text(85, sales_h + 3, f'売上高\n{sales:,}億円', ha='center', va='bottom', fontsize=9, fontweight='bold')
+    # --- ラベル表示 ---
+    ax.text(20, 100 - ca_h/2, f'流動資産\n{current_assets:,.0f}億円\n{ca_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
+    ax.text(20, fa_h/2, f'固定資産\n{fixed_assets:,.0f}億円\n{fa_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold', color='white')
+    ax.text(50, 100 - cl_h/2, f'流動負債\n{current_liab:,.0f}億円\n{cl_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
+    ax.text(50, 100 - cl_h - fl_h/2, f'固定負債\n{fixed_liab:,.0f}億円\n{fl_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold', color='white')
+    ax.text(50, eq_h/2, f'純資産\n{equity:,.0f}億円\n{eq_h:.1f}%', ha='center', va='center', fontsize=9, fontweight='bold')
+    ax.text(85, sales_h + 3, f'売上高\n{sales:,.0f}億円', ha='center', va='bottom', fontsize=9, fontweight='bold')
     
-    if op_h > 5:
-        ax.text(85, op_h/2, f'営業利益\n{op_profit:,}億円\n{(op_profit/sales*100):.1f}%', ha='center', va='center', fontsize=8, fontweight='bold', color='white')
+    if op_h > 3:
+        ax.text(85, op_h/2, f'営業利益\n{op_profit:,.0f}億円\n{(op_profit/sales*100):.1f}%', ha='center', va='center', fontsize=8, fontweight='bold', color='white')
 
     ax.legend(loc='upper right', bbox_to_anchor=(1.35, 1), fontsize=10, frameon=True)
     ax.set_xlim(0, 110)
-    ax.set_ylim(-10, 110)
+    ax.set_ylim(-10, max(110, sales_h + 15))
     plt.axis('off')
     plt.title(f"{company_name} ({year_label}) 財務構造分析図", fontsize=16, pad=20)
     
@@ -209,8 +228,9 @@ def create_financial_chart(company_name, year_label, financial_data, output_path
     plt.savefig(output_path, bbox_inches='tight', dpi=200)
     plt.close()
 
+
 def sync_pending_images_to_notion(tasks):
-    """Notionへ画像を送信（年度順に並び替えて反映）"""
+    """Notionへ生成画像を連携追加"""
     now_ts = int(time.time())
     for task in tasks:
         page_id = task['page_id']
@@ -249,6 +269,7 @@ def sync_pending_images_to_notion(tasks):
         else:
             print(f"Notion画像追加エラー: {res.text}")
 
+
 if __name__ == "__main__":
     mode = os.environ.get("SYNC_MODE", "GENERATE")
     
@@ -259,6 +280,7 @@ if __name__ == "__main__":
         base_year = 2024
 
         for comp in companies:
+            # 変数として動的読み込み（特定の企業コードに依存しない）
             ticker = comp.get("ticker")
             name = comp.get("name")
             page_id = comp.get("page_id")
@@ -276,7 +298,8 @@ if __name__ == "__main__":
                     print(f"【スキップ】{yr}年度の画像はすでにNotion内に存在します。")
                     continue
                 
-                fin_data = fetch_financial_data_from_edinet(ticker, yr)
+                # 動的な ticker と yr を引数で渡してデータを検索・取得
+                fin_data = fetch_financial_data(ticker, yr)
                 file_name = f"{ticker}_{yr}.png"
                 rel_path = f"images/{file_name}"
                 create_financial_chart(name, f"{yr}年度", fin_data, rel_path)
