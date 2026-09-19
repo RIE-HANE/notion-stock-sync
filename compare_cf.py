@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import time
+import japanize_matplotlib
 import matplotlib.pyplot as plt
 import pandas as pd
 import requests
