@@ -141,6 +141,7 @@ def get_notion_companies():
 
 
 # EDINET API から財務データを検索・取得
+# EDINET API から財務データを検索・取得（月・特定日のハードコードなし）
 def fetch_edinet_data(ticker, year, retry_count=1):
     api_key = os.getenv("EDINET_API_KEY")
     if not api_key:
@@ -149,16 +150,21 @@ def fetch_edinet_data(ticker, year, retry_count=1):
 
     print(f"  -> EDINET APIで {ticker} ({year}年度) のデータを検索中...")
 
-    # 有価証券報告書が提出される翌年6月下旬（20日〜30日）を検索
+    # 対象年度の翌年1年間の全提出日を自動生成（月や日の条件・分岐指定なし）
     target_year = year + 1
-    candidate_dates = [f"{target_year}-06-{d:02d}" for d in range(20, 31)]
+    start_date = datetime.date(target_year, 1, 1)
+    end_date = datetime.date(target_year, 12, 31)
 
     doc_id = None
+    curr_date = start_date
 
-    for target_date in candidate_dates:
+    while curr_date <= end_date:
+        date_str = curr_date.strftime("%Y-%m-%d")
+        curr_date += datetime.timedelta(days=1)
+
         url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
         params = {
-            "date": target_date,
+            "date": date_str,
             "type": 2,
             "Subscription-Key": api_key,
         }
@@ -171,21 +177,22 @@ def fetch_edinet_data(ticker, year, retry_count=1):
             results = res.json().get("results", [])
 
             for doc in results:
-                sec_code = str(doc.get("secCode", ""))[:4]
-                doc_type = str(doc.get("docTypeCode", ""))
+                # 120 = 有価証券報告書
+                if str(doc.get("docTypeCode")) == "120":
+                    sec_code = doc.get("secCode")
 
-                # 該当企業の有価証券報告書 (120) を検出
-                if sec_code == str(ticker).strip()[:4] and doc_type == "120":
-                    doc_id = doc.get("docID")
-                    print(
-                        f"    ✓ 書類発見 ({target_date}): docID={doc_id}"
-                    )
-                    return parse_edinet_xbrl(doc_id, ticker, year, api_key)
+                    # 証券コード一致チェック
+                    if sec_code in [f"{ticker}0", str(ticker)]:
+                        doc_id = doc.get("docID") or doc.get("docId")
+                        print(f"    ✓ 書類発見 ({date_str}): docID={doc_id}")
+
+                        # 発見したら即座にXBRL解析して結果を返却
+                        return parse_edinet_xbrl(doc_id, ticker, year, api_key)
 
         except Exception:
             continue
 
-    # 1回のみリトライ（前年度で検索）
+    # 見つからなかった場合のみ1年戻してリトライ
     if not doc_id and retry_count > 0:
         print(
             f"    ⚠ {year}年度のデータがないため、1年引いて ({year - 1}年度) 再検索します..."
@@ -197,7 +204,6 @@ def fetch_edinet_data(ticker, year, retry_count=1):
             f"    ⚠ {year}年度の書類が見つかりませんでした (ticker: {ticker})"
         )
         return None
-
 
 # 文字コードを安全にデコードしてテキストを読み込むヘルパー関数
 def safe_decode(raw_bytes):
