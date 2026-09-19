@@ -6,8 +6,10 @@ import tempfile
 from edinet.xbrl_file import XBRLFile
 import requests
 
-# 今日の日付から「提出済みの最新年度（BASE_YEAR）」を自動計算
 today = datetime.date.today()
+TODAY_STR = today.strftime("%Y-%m-%d")
+
+# 今日の日付から「提出済みの最新年度（BASE_YEAR）」を自動計算
 if (today.month, today.day) < (6, 30):
     BASE_YEAR = today.year - 2
 else:
@@ -33,6 +35,7 @@ def init_db():
             sales REAL,
             op_profit REAL,
             net_income REAL,
+            created_at TEXT,
             PRIMARY KEY (ticker, year)
         )
     """)
@@ -40,7 +43,7 @@ def init_db():
     conn.close()
 
 
-# 指定した企業・年度のデータがすでにDBにあるか確認
+# 指定した企業・年度のデータがすでにDBにあるか確認する関数
 def is_data_exists(ticker, year):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -53,6 +56,20 @@ def is_data_exists(ticker, year):
     result = cursor.fetchone()
     conn.close()
     return result is not None
+    
+# DB内の企業の最新年度を取得する関数
+def get_latest_year_in_db(ticker):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT MAX(year) FROM financial_metrics WHERE ticker = ?
+    """,
+        (str(ticker),),
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result and result[0] is not None else None
 
 
 # Notionから全対象企業と「過去データ取得フラグ」を取得
@@ -180,7 +197,7 @@ def fetch_edinet_data(ticker, year, retry_count=1):
         return None
 
 
-# EDINET XBRL書類のデータ解析処理 (方法A: edinet-python使用)
+# EDINET XBRL書類のデータ解析処理 (一時ファイル経由)
 def parse_edinet_xbrl(doc_id, ticker, year, api_key):
     """EDINET APIから実際の書類(zip)を取得し、XBRLから財務データを抽出"""
     url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
@@ -202,7 +219,7 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
             # ファイルパスを指定して XBRLFile を読み込む
             xbrl = XBRLFile(tmp_zip_path)
 
-            # 各科目の抽出（見つからない場合は 0.0）
+            # 各科目の抽出
             total_assets = float(
                 xbrl.get_value("jpcrp_cor:TotalAssetsSummaryOfBusinessResults")
                 or 0.0
@@ -252,7 +269,6 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
                 "net_income": net_income,
             }
         finally:
-            # 使い終わった一時ファイルを削除
             if os.path.exists(tmp_zip_path):
                 os.remove(tmp_zip_path)
 
@@ -260,7 +276,8 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
         print(f"    ⚠ XBRLパース失敗 ({ticker}): {e}")
         return None
 
-# DB追加・更新 (UPSERT)
+
+# DB追加・更新 (created_at も含めて保存)
 def upsert_financial_data(data):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -268,8 +285,8 @@ def upsert_financial_data(data):
         """
         INSERT INTO financial_metrics (
             ticker, year, total_assets, current_assets, fixed_assets,
-            current_liab, fixed_liab, equity, sales, op_profit, net_income
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            current_liab, fixed_liab, equity, sales, op_profit, net_income, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(ticker, year) DO UPDATE SET
             total_assets=excluded.total_assets,
             current_assets=excluded.current_assets,
@@ -279,7 +296,8 @@ def upsert_financial_data(data):
             equity=excluded.equity,
             sales=excluded.sales,
             op_profit=excluded.op_profit,
-            net_income=excluded.net_income
+            net_income=excluded.net_income,
+            created_at=excluded.created_at
     """,
         (
             data["ticker"],
@@ -293,6 +311,7 @@ def upsert_financial_data(data):
             data["sales"],
             data["op_profit"],
             data["net_income"],
+            TODAY_STR,
         ),
     )
     conn.commit()
@@ -301,7 +320,6 @@ def upsert_financial_data(data):
 
 # メイン処理
 def sync_db_from_edinet():
-    """Notionの条件に合わせてEDINETからデータを取得しDBを構築"""
     init_db()
     companies = get_notion_companies()
 
@@ -309,39 +327,32 @@ def sync_db_from_edinet():
         print("Notionから対象企業を取得できませんでした。")
         return
 
-    print(f"📌 自動算出された基準年度: {BASE_YEAR}年")
+    print(f"📌 自動算出された基準年度: {BASE_YEAR}年 (本日: {TODAY_STR})")
 
     for comp in companies:
         ticker = comp["ticker"]
         target_3years = comp["target_3years"]
 
-        print(f"\n--- 処理中: 証券コード {ticker} ---")
+        db_latest_year = get_latest_year_in_db(ticker)
 
-        # 「過去」フラグによる対象年度の設定
-        if target_3years:
-            needed_years = [BASE_YEAR - 2, BASE_YEAR - 1, BASE_YEAR]
-            print("  [条件] 過去3年分のデータが必要")
-        else:
-            needed_years = [BASE_YEAR]
-            print("  [条件] 最新1年分のみ必要")
+        print(f"\n--- 処理中: 証券コード {ticker} (DB最新: {db_latest_year or 'なし'}) ---")
 
-        # 各年度についてDB存在チェックを行い、足りない年度だけ取得
+        # 取得が必要な年度リストを決定
+        needed_years = [BASE_YEAR - 2, BASE_YEAR - 1, BASE_YEAR] if target_3years else [BASE_YEAR]
+
+        # 各年度についてDB存在チェックを行い、不足分だけ取得
         for yr in needed_years:
             if is_data_exists(ticker, yr):
-                print(
-                    f"  └ 【スキップ】 {yr}年（すでにDBに存在します）"
-                )
+                print(f"  └ 【スキップ】 {yr}年（すでにDBに存在します）")
                 continue
 
+            # DBにない年度だけ EDINET API を呼び出し
             fin_data = fetch_edinet_data(ticker, yr)
             if fin_data:
                 upsert_financial_data(fin_data)
-                print(f"  └ 【新規追加】 {fin_data['year']}年")
+                print(f"  └ 【登録/更新完了】 {fin_data['year']}年")
             else:
-                print(
-                    f"  └ 【取得失敗】 {yr}年（EDINETにデータがありません）"
-                )
-
+                print(f"  └ 【取得失敗】 {yr}年（EDINETにデータがありません）")
 
 if __name__ == "__main__":
     print("=== DBセットアップ処理を開始します ===")
