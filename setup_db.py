@@ -2,7 +2,7 @@ import datetime
 import io
 import os
 import sqlite3
-import zipfile
+import tempfile
 from edinet.xbrl_file import XBRLFile
 import requests
 
