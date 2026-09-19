@@ -190,8 +190,8 @@ def format_amount(amount):
 def create_financial_chart(
     company_name, year_label, financial_data, output_path
 ):
-    """財務構造分析図（BS/PL）を作成（座標ずれ修正・全ラベル表示版）"""
-    fig, ax = plt.subplots(figsize=(10, 8))
+    """財務構造分析図（BS/PL）を作成（数値・%を右側凡例に集約したスッキリ版）"""
+    fig, ax = plt.subplots(figsize=(11, 7))
 
     # --- 単位の正規化 (円 -> 億円) ---
     raw_total_assets = financial_data.get("total_assets", 0)
@@ -217,6 +217,7 @@ def create_financial_chart(
 
     sales_h = (sales / total_assets) * 100
     op_h = (op_profit / total_assets) * 100 if op_profit > 0 else 0
+    op_ratio = (op_profit / sales * 100) if sales > 0 else 0
 
     # 財務指標の計算
     fin_lev = total_assets / equity if equity > 0 else 0
@@ -236,7 +237,7 @@ def create_financial_chart(
         cellText=table_data,
         colWidths=[0.22, 0.18],
         loc="upper right",
-        bbox=[1.02, 0.15, 0.38, 0.30],
+        bbox=[1.02, 0.05, 0.40, 0.28],
     )
     table.auto_set_font_size(False)
     table.set_fontsize(10)
@@ -245,100 +246,74 @@ def create_financial_chart(
         cell.set_edgecolor("#cccccc")
         cell.set_linewidth(1)
 
-    # --- グラフ描画 (正しいY座標積算) ---
+    # --- 凡例用ラベルの作成（項目名 + 金額 + 構成比） ---
+    label_fa = f"固定資産 : {format_amount(fixed_assets)}億円 ({fa_h:.1f}%)"
+    label_ca = f"流動資産 : {format_amount(current_assets)}億円 ({ca_h:.1f}%)"
+    label_eq = f"純資産     : {format_amount(equity)}億円 ({eq_h:.1f}%)"
+    label_fl = f"固定負債 : {format_amount(fixed_liab)}億円 ({fl_h:.1f}%)"
+    label_cl = f"流動負債 : {format_amount(current_liab)}億円 ({cl_h:.1f}%)"
+    label_sales = f"売上高     : {format_amount(sales)}億円"
+    label_op = f"営業利益 : {format_amount(op_profit)}億円 ({op_ratio:.1f}%)"
+
+    # --- グラフ描画 ---
     # 左柱：資産 (下から: 固定資産 ➔ 流動資産)
     ax.add_patch(
         patches.Rectangle(
-            (5, 0), 25, fa_h, facecolor="#4682b4", edgecolor="black", label="固定資産"
+            (5, 0), 25, fa_h, facecolor="#4682b4", edgecolor="black", label=label_fa
         )
     )
     ax.add_patch(
         patches.Rectangle(
-            (5, fa_h), 25, ca_h, facecolor="#87ceeb", edgecolor="black", label="流動資産"
+            (5, fa_h), 25, ca_h, facecolor="#87ceeb", edgecolor="black", label=label_ca
         )
     )
 
     # 右柱：負債・純資産 (下から: 純資産 ➔ 固定負債 ➔ 流動負債)
     ax.add_patch(
         patches.Rectangle(
-            (33, 0), 25, eq_h, facecolor="#90ee90", edgecolor="black", label="純資産"
+            (33, 0), 25, eq_h, facecolor="#90ee90", edgecolor="black", label=label_eq
         )
     )
     ax.add_patch(
         patches.Rectangle(
-            (33, eq_h), 25, fl_h, facecolor="#cd5c5c", edgecolor="black", label="固定負債"
+            (33, eq_h), 25, fl_h, facecolor="#cd5c5c", edgecolor="black", label=label_fl
         )
     )
     ax.add_patch(
         patches.Rectangle(
-            (33, eq_h + fl_h), 25, cl_h, facecolor="#f08080", edgecolor="black", label="流動負債"
+            (33, eq_h + fl_h), 25, cl_h, facecolor="#f08080", edgecolor="black", label=label_cl
         )
     )
 
     # PL柱：売上高・営業利益
     ax.add_patch(
         patches.Rectangle(
-            (68, 0), 18, sales_h, facecolor="#ffcccb", edgecolor="black", label="売上高"
+            (68, 0), 18, sales_h, facecolor="#ffcccb", edgecolor="black", label=label_sales
         )
     )
     if op_h > 0:
         ax.add_patch(
             patches.Rectangle(
-                (68, 0), 18, op_h, facecolor="#ff4500", edgecolor="black", label="営業利益"
+                (68, 0), 18, op_h, facecolor="#ff4500", edgecolor="black", label=label_op
             )
         )
 
-    # --- ラベル表示 (描画位置を正確な各領域の中央に設定) ---
-    # 固定資産
-    ax.text(
-        17.5, max(fa_h / 2, 2.5), f"固定資産\n{format_amount(fixed_assets)}億円\n{fa_h:.1f}%",
-        ha="center", va="center", fontsize=8, fontweight="bold", color="white" if fa_h > 5 else "black"
-    )
-    # 流動資産
-    ax.text(
-        17.5, fa_h + ca_h / 2, f"流動資産\n{format_amount(current_assets)}億円\n{ca_h:.1f}%",
-        ha="center", va="center", fontsize=8, fontweight="bold"
-    )
-
-    # 純資産
-    ax.text(
-        45.5, max(eq_h / 2, 2.5), f"純資産\n{format_amount(equity)}億円\n{eq_h:.1f}%",
-        ha="center", va="center", fontsize=8, fontweight="bold"
-    )
-    # 固定負債 (非常に狭い場合は文字を小さく)
-    fl_font = 6 if fl_h < 5 else 8
-    ax.text(
-        45.5, eq_h + fl_h / 2, f"固定負債\n{format_amount(fixed_liab)}億円\n{fl_h:.1f}%",
-        ha="center", va="center", fontsize=fl_font, fontweight="bold", color="white" if fl_h > 3 else "black"
-    )
-    # 流動負債
-    cl_font = 6 if cl_h < 5 else 8
-    ax.text(
-        45.5, eq_h + fl_h + cl_h / 2, f"流動負債\n{format_amount(current_liab)}億円\n{cl_h:.1f}%",
-        ha="center", va="center", fontsize=cl_font, fontweight="bold"
-    )
-
-    # 売上高
-    ax.text(
-        77, sales_h + 2, f"売上高\n{format_amount(sales)}億円",
-        ha="center", va="bottom", fontsize=8, fontweight="bold"
-    )
-    # 営業利益
-    op_ratio = (op_profit / sales * 100) if sales > 0 else 0
-    ax.text(
-        77, max(op_h / 2, 2), f"営業利益\n{format_amount(op_profit)}億円\n{op_ratio:.1f}%",
-        ha="center", va="center", fontsize=7, fontweight="bold", color="white"
-    )
+    # --- 柱の直上・直下等のアノテーションが必要な場合（※完全に不要なら削除可） ---
+    # 柱の比較をわかりやすくするため、柱の下にカテゴリ名だけを表示
+    ax.text(17.5, -4, "資産の部", ha="center", va="top", fontsize=10, fontweight="bold")
+    ax.text(45.5, -4, "負債・純資産の部", ha="center", va="top", fontsize=10, fontweight="bold")
+    ax.text(77, -4, "損益(PL)", ha="center", va="top", fontsize=10, fontweight="bold")
 
     # --- 凡例と配置調整 ---
     ax.legend(
         loc="upper right",
-        bbox_to_anchor=(1.40, 1.0),
-        fontsize=9,
+        bbox_to_anchor=(1.45, 1.0),
+        fontsize=9.5,
         frameon=True,
+        edgecolor="#cccccc",
     )
     ax.set_xlim(0, 95)
-    ax.set_ylim(-5, max(110, sales_h + 12))
+    ax.set_ylim(-8, max(110, sales_h + 12))
     plt.axis("off")
     plt.title(
         f"{company_name} ({year_label}) 財務構造分析図", fontsize=15, pad=15
