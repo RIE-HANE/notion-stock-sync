@@ -79,8 +79,46 @@ def get_notion_pages():
     return pages
 
 
+def get_or_create_subpage(parent_page_id, subpage_title):
+    """親企業ページ直下に指定タイトルのサブページが存在するか確認し、なければ作成してpage_idを返す"""
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json",
+    }
+
+    # 1. 親ページ直下のブロック一覧から既存サブページを検索
+    url = f"https://api.notion.com/v1/blocks/{parent_page_id}/children"
+    res = requests.get(url, headers=headers)
+    if res.status_code == 200:
+        blocks = res.json().get("results", [])
+        for b in blocks:
+            if b.get("type") == "child_page":
+                if b.get("child_page", {}).get("title") == subpage_title:
+                    return b["id"]
+
+    # 2. 存在しない場合は新規作成
+    create_url = "https://api.notion.com/v1/pages"
+    payload = {
+        "parent": {"page_id": parent_page_id},
+        "properties": {
+            "title": {
+                "title": [{"type": "text", "text": {"content": subpage_title}}]
+            }
+        },
+    }
+    res_create = requests.post(create_url, headers=headers, json=payload)
+    if res_create.status_code == 200:
+        subpage_id = res_create.json().get("id")
+        print(f"  └ 【サブページ作成】 '{subpage_title}' を作成しました")
+        return subpage_id
+    else:
+        print(f"  └ サブページ作成エラー: {res_create.text}")
+        return parent_page_id
+
+
 def get_existing_notion_image_years(page_id):
-    """Notionページ内にすでに存在する年度ブロックを検出"""
+    """指定ページ（サブページ含む）内にすでに存在する年度ブロックを検出"""
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -117,7 +155,6 @@ def get_latest_year_for_ticker(ticker):
         if row and row[0] is not None:
             return int(row[0])
 
-    # DBに該当データがない場合のフォールバック（前年）
     return datetime.now().year - 1
 
 
@@ -187,10 +224,11 @@ def format_amount(amount):
     else:
         return f"{amount:,.2f}"
 
+
 def create_financial_chart(
     company_name, year_label, financial_data, output_path
 ):
-    """財務構造分析図（BS/PL）を作成（数値・%を右側凡例に集約したスッキリ版）"""
+    """財務構造分析図（BS/PL）を作成（5%以上で図中項目名のみ表示版）"""
     fig, ax = plt.subplots(figsize=(11, 7))
 
     # --- 単位の正規化 (円 -> 億円) ---
@@ -246,17 +284,17 @@ def create_financial_chart(
         cell.set_edgecolor("#cccccc")
         cell.set_linewidth(1)
 
-    # --- 凡例用ラベルの作成（項目名 + 金額 + 構成比） ---
+    # --- 凡例用ラベルの作成 ---
     label_fa = f"固定資産 : {format_amount(fixed_assets)}億円 ({fa_h:.1f}%)"
     label_ca = f"流動資産 : {format_amount(current_assets)}億円 ({ca_h:.1f}%)"
     label_eq = f"純資産     : {format_amount(equity)}億円 ({eq_h:.1f}%)"
     label_fl = f"固定負債 : {format_amount(fixed_liab)}億円 ({fl_h:.1f}%)"
     label_cl = f"流動負債 : {format_amount(current_liab)}億円 ({cl_h:.1f}%)"
-    label_sales = f"売上高     : {format_amount(sales)}億円"
+    label_sales = f"売上高     : {format_amount(sales)}億円 ({sales_h:.1f}%)"
     label_op = f"営業利益 : {format_amount(op_profit)}億円 ({op_ratio:.1f}%)"
 
     # --- グラフ描画 ---
-    # 左柱：資産 (下から: 固定資産 ➔ 流動資産)
+    # 左柱：資産
     ax.add_patch(
         patches.Rectangle(
             (5, 0), 25, fa_h, facecolor="#4682b4", edgecolor="black", label=label_fa
@@ -268,7 +306,7 @@ def create_financial_chart(
         )
     )
 
-    # 右柱：負債・純資産 (下から: 純資産 ➔ 固定負債 ➔ 流動負債)
+    # 右柱：負債・純資産
     ax.add_patch(
         patches.Rectangle(
             (33, 0), 25, eq_h, facecolor="#90ee90", edgecolor="black", label=label_eq
@@ -298,8 +336,27 @@ def create_financial_chart(
             )
         )
 
-    # --- 柱の直上・直下等のアノテーションが必要な場合（※完全に不要なら削除可） ---
-    # 柱の比較をわかりやすくするため、柱の下にカテゴリ名だけを表示
+    # --- 図の中に納まる場合のみ項目名テキスト（文字列のみ）をセット (高さ5%以上) ---
+    if fa_h >= 5:
+        ax.text(17.5, fa_h / 2, "固定資産", ha="center", va="center", fontsize=9, fontweight="bold", color="white")
+    if ca_h >= 5:
+        ax.text(17.5, fa_h + ca_h / 2, "流動資産", ha="center", va="center", fontsize=9, fontweight="bold")
+
+    if eq_h >= 5:
+        ax.text(45.5, eq_h / 2, "純資産", ha="center", va="center", fontsize=9, fontweight="bold")
+    if fl_h >= 5:
+        ax.text(45.5, eq_h + fl_h / 2, "固定負債", ha="center", va="center", fontsize=9, fontweight="bold", color="white")
+    if cl_h >= 5:
+        ax.text(45.5, eq_h + fl_h + cl_h / 2, "流動負債", ha="center", va="center", fontsize=9, fontweight="bold")
+
+    if sales_h >= 5:
+        # 営業利益の領域と重ならない中央位置に「売上高」とだけ表示
+        sales_text_y = (sales_h + op_h) / 2 if op_h >= 5 else sales_h / 2
+        ax.text(77, sales_text_y, "売上高", ha="center", va="center", fontsize=9, fontweight="bold")
+    if op_h >= 5:
+        ax.text(77, op_h / 2, "営業利益", ha="center", va="center", fontsize=8, fontweight="bold", color="white")
+
+    # --- 柱の下のカテゴリ名 ---
     ax.text(17.5, -4, "資産の部", ha="center", va="top", fontsize=10, fontweight="bold")
     ax.text(45.5, -4, "負債・純資産の部", ha="center", va="top", fontsize=10, fontweight="bold")
     ax.text(77, -4, "損益(PL)", ha="center", va="top", fontsize=10, fontweight="bold")
@@ -323,11 +380,12 @@ def create_financial_chart(
     plt.savefig(output_path, bbox_inches="tight", dpi=200)
     plt.close()
 
+
 def sync_pending_images_to_notion(tasks):
-    """Notionへ生成画像を連携追加"""
+    """Notionのサブページへ生成画像を連携追加"""
     now_ts = int(time.time())
     for task in tasks:
-        page_id = task["page_id"]
+        subpage_id = task["subpage_id"]
         chart_list = sorted(task["chart_list"], key=lambda x: x["year"])
 
         children_blocks = []
@@ -362,7 +420,7 @@ def sync_pending_images_to_notion(tasks):
                 }
             )
 
-        url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+        url = f"https://api.notion.com/v1/blocks/{subpage_id}/children"
         headers = {
             "Authorization": f"Bearer {NOTION_API_KEY}",
             "Notion-Version": "2022-06-28",
@@ -372,7 +430,7 @@ def sync_pending_images_to_notion(tasks):
             url, headers=headers, json={"children": children_blocks}
         )
         if res.status_code == 200:
-            print(f"Notionへ {len(chart_list)}枚 の画像を追加しました。")
+            print(f"Notionサブページへ {len(chart_list)}枚 の画像を追加しました。")
         else:
             print(f"Notion画像追加エラー: {res.text}")
 
@@ -397,12 +455,15 @@ if __name__ == "__main__":
                 continue
 
             print(f"\n--- 処理開始: {name} (コード: {ticker}) ---")
-            existing_years = get_existing_notion_image_years(page_id)
 
-            # 企業ごとにDBから最新年度を取得
+            # ★ サブページ「財務構造分析 (BS/PL)」の取得/作成
+            subpage_id = get_or_create_subpage(page_id, "財務構造分析 (BS/PL)")
+
+            # サブページ内の既存年度を取得
+            existing_years = get_existing_notion_image_years(subpage_id)
+
             latest_year = get_latest_year_for_ticker(ticker)
 
-            # 3年フラグに応じて対象年度を判定
             target_years = (
                 [latest_year - 2, latest_year - 1, latest_year]
                 if target_3years
@@ -412,11 +473,10 @@ if __name__ == "__main__":
             for yr in target_years:
                 if yr in existing_years:
                     print(
-                        f"【スキップ】{yr}年度の画像はすでにNotion内に存在します。"
+                        f"【スキップ】{yr}年度の画像はすでにNotionサブページ内に存在します。"
                     )
                     continue
 
-                # ★ 追加機能: DB内に本日作成（処理日＝作成日）のデータが存在するか確認
                 if not is_data_created_today(ticker, yr):
                     print(
                         f"【スキップ】{name} ({ticker}) の {yr}年度データがDBに存在しない、または本日 ({TODAY_STR}) 作成されたデータではありません。"
@@ -436,7 +496,7 @@ if __name__ == "__main__":
                 print(f"【作成成功】{yr}年度の画像を生成しました: {rel_path}")
 
     elif mode == "NOTION_SYNC":
-        print("【Phase 2】未追加の画像のみNotionへ反映中...")
+        print("【Phase 2】未追加の画像のみNotionサブページへ反映中...")
         companies = get_notion_pages()
         pending_tasks = []
 
@@ -446,7 +506,10 @@ if __name__ == "__main__":
             if not ticker or str(ticker) == "None":
                 continue
 
-            existing_years = get_existing_notion_image_years(page_id)
+            # サブページ「財務構造分析 (BS/PL)」を取得
+            subpage_id = get_or_create_subpage(page_id, "財務構造分析 (BS/PL)")
+
+            existing_years = get_existing_notion_image_years(subpage_id)
             local_files = glob.glob(f"images/{ticker}_*.png")
             chart_list = []
 
@@ -454,7 +517,6 @@ if __name__ == "__main__":
                 filename = os.path.basename(file_path)
                 try:
                     yr = int(filename.split("_")[1].split(".")[0])
-                    # ★ 追加機能: Notion未追加かつ本日作成されたDBデータの場合のみ連携対象にする
                     if yr not in existing_years and is_data_created_today(
                         ticker, yr
                     ):
@@ -466,7 +528,7 @@ if __name__ == "__main__":
             if chart_list:
                 chart_list = sorted(chart_list, key=lambda x: x["year"])
                 pending_tasks.append(
-                    {"page_id": page_id, "chart_list": chart_list}
+                    {"subpage_id": subpage_id, "chart_list": chart_list}
                 )
 
         if pending_tasks:
