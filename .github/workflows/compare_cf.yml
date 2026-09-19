@@ -22,7 +22,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests matplotlib japanize-matplotlib pandas notion-client
 
-      - name: Step 1 - Generate Compare Charts
+      # Step 1: 比較対象企業の過去5年分データをDBへ自動収集（新規追加）
+      - name: Step 1 - Fetch Compare Financial Data to DB
+        env:
+          EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+        run: python setup_compare_db.py
+
+      # Step 2: DBのデータを元に比較表画像（images/）を生成
+      - name: Step 2 - Generate Compare Tables
         env:
           EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
@@ -30,22 +39,28 @@ jobs:
           SYNC_MODE: "GENERATE"
         run: python compare_cf.py
 
-      - name: Step 2 - Commit & Push Images to GitHub
+      # Step 3: 更新されたDBファイルおよび比較表画像をGitHubへPush
+      - name: Step 3 - Commit & Push DB and Images to GitHub
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git pull origin main || true
-          git add images/
+          
+          # DBと比較表画像の両方を追加
+          git add financial_data.db images/
+          
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "Add comparison chart images [skip ci]"
+            git commit -m "Update comparison DB and table images [skip ci]"
             git push origin main
           fi
 
-      - name: Step 3 - Sync Images to Notion
+      # Step 4: GitHub Raw URL経由でNotionへ同期
+      - name: Step 4 - Sync Images to Notion
         env:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           SYNC_MODE: "NOTION_SYNC"
         run: python compare_cf.py
