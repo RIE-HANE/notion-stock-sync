@@ -160,21 +160,27 @@ def fetch_cf_data_from_db(ticker):
 def create_two_company_cf_table_image(
     comp_a_name, comp_b_name, years_a, cf_a, years_b, cf_b, output_path
 ):
-    """画像（書籍）デザインを再現したきれいな表画像を生成"""
+    """表画像を生成 (日本語フォント文字化け対策版)"""
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8.5, 5.2))
     fig.patch.set_facecolor("white")
 
-    # 日本語フォント設定
+    # Linux (GitHub Actions) / Windows / Mac のいずれの環境でも対応する日本語フォントリスト
     plt.rcParams["font.sans-serif"] = [
+        "Noto Sans CJK JP",
+        "Noto Sans JP",
+        "TakaoPGothic",
+        "IPAGothic",
         "Meiryo",
         "MS Gothic",
-        "TakaoPGothic",
         "sans-serif",
     ]
+    plt.rcParams["axes.unicode_minus"] = (
+        False  # マイナス記号の文字化け（豆腐化）を防止
+    )
 
     rows = ["営業CF", "投資CF", "財務CF"]
 
-    # --- 自社 (A社) ---
+    # 自社 (A社)
     ax1.axis("off")
     ax1.set_title(
         f"  {comp_a_name}  ",
@@ -200,7 +206,6 @@ def create_two_company_cf_table_image(
     t1.set_fontsize(9)
     t1.scale(1, 1.6)
 
-    # ヘッダー（年度・5年計）の装飾
     for (r, c), cell in t1.get_celld().items():
         if r == 0:
             cell.set_facecolor("#EFEFEF")
@@ -209,7 +214,7 @@ def create_two_company_cf_table_image(
             cell.set_facecolor("#FFFFFF")
             cell.set_text_props(weight="bold")
 
-    # --- 比較対象社 (B社) ---
+    # 比較対象社 (B社)
     ax2.axis("off")
     ax2.set_title(
         f"  {comp_b_name}  ",
@@ -243,14 +248,12 @@ def create_two_company_cf_table_image(
             cell.set_facecolor("#FFFFFF")
             cell.set_text_props(weight="bold")
 
-    # 右上に（単位：百万円）を表示
     fig.text(0.85, 0.95, "(単位：百万円)", fontsize=9, ha="right")
 
     plt.tight_layout()
     os.makedirs("images", exist_ok=True)
     plt.savefig(output_path, bbox_inches="tight", dpi=200)
     plt.close()
-
 
 def sync_compare_images_to_notion(tasks):
     """Notionへ比較表のサブページを作成し、その中に画像のみを反映（メインページやサブページにテキストタイトルを挿入しない）"""
