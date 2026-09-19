@@ -191,60 +191,74 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
         if res.status_code != 200:
             return None
 
-        # zipファイルをメモリ上で展開してXBRL解析
-        z = zipfile.ZipFile(io.BytesIO(res.content))
-        xbrl = XBRLFile(z)
+        # 一時ファイルを作成して zip を保存
+        with tempfile.NamedTemporaryFile(
+            delete=False, suffix=".zip"
+        ) as tmp_file:
+            tmp_file.write(res.content)
+            tmp_zip_path = tmp_file.name
 
-        # 各科目の抽出（見つからない場合は 0.0）
-        total_assets = float(
-            xbrl.get_value("jpcrp_cor:TotalAssetsSummaryOfBusinessResults")
-            or 0.0
-        )
-        sales = float(
-            xbrl.get_value("jpcrp_cor:NetSalesSummaryOfBusinessResults") or 0.0
-        )
-        op_profit = float(
-            xbrl.get_value(
-                "jpcrp_cor:OperatingIncomeLossSummaryOfBusinessResults"
+        try:
+            # ファイルパスを指定して XBRLFile を読み込む
+            xbrl = XBRLFile(tmp_zip_path)
+
+            # 各科目の抽出（見つからない場合は 0.0）
+            total_assets = float(
+                xbrl.get_value("jpcrp_cor:TotalAssetsSummaryOfBusinessResults")
+                or 0.0
             )
-            or 0.0
-        )
-        net_income = float(
-            xbrl.get_value("jpcrp_cor:NetIncomeLossSummaryOfBusinessResults")
-            or 0.0
-        )
+            sales = float(
+                xbrl.get_value("jpcrp_cor:NetSalesSummaryOfBusinessResults")
+                or 0.0
+            )
+            op_profit = float(
+                xbrl.get_value(
+                    "jpcrp_cor:OperatingIncomeLossSummaryOfBusinessResults"
+                )
+                or 0.0
+            )
+            net_income = float(
+                xbrl.get_value(
+                    "jpcrp_cor:NetIncomeLossSummaryOfBusinessResults"
+                )
+                or 0.0
+            )
 
-        current_assets = float(
-            xbrl.get_value("jppfs_cor:CurrentAssets") or 0.0
-        )
-        fixed_assets = float(
-            xbrl.get_value("jppfs_cor:NonCurrentAssets") or 0.0
-        )
-        current_liab = float(
-            xbrl.get_value("jppfs_cor:CurrentLiabilities") or 0.0
-        )
-        fixed_liab = float(
-            xbrl.get_value("jppfs_cor:NonCurrentLiabilities") or 0.0
-        )
-        equity = float(xbrl.get_value("jppfs_cor:NetAssets") or 0.0)
+            current_assets = float(
+                xbrl.get_value("jppfs_cor:CurrentAssets") or 0.0
+            )
+            fixed_assets = float(
+                xbrl.get_value("jppfs_cor:NonCurrentAssets") or 0.0
+            )
+            current_liab = float(
+                xbrl.get_value("jppfs_cor:CurrentLiabilities") or 0.0
+            )
+            fixed_liab = float(
+                xbrl.get_value("jppfs_cor:NonCurrentLiabilities") or 0.0
+            )
+            equity = float(xbrl.get_value("jppfs_cor:NetAssets") or 0.0)
 
-        return {
-            "ticker": str(ticker),
-            "year": int(year),
-            "total_assets": total_assets,
-            "current_assets": current_assets,
-            "fixed_assets": fixed_assets,
-            "current_liab": current_liab,
-            "fixed_liab": fixed_liab,
-            "equity": equity,
-            "sales": sales,
-            "op_profit": op_profit,
-            "net_income": net_income,
-        }
+            return {
+                "ticker": str(ticker),
+                "year": int(year),
+                "total_assets": total_assets,
+                "current_assets": current_assets,
+                "fixed_assets": fixed_assets,
+                "current_liab": current_liab,
+                "fixed_liab": fixed_liab,
+                "equity": equity,
+                "sales": sales,
+                "op_profit": op_profit,
+                "net_income": net_income,
+            }
+        finally:
+            # 使い終わった一時ファイルを削除
+            if os.path.exists(tmp_zip_path):
+                os.remove(tmp_zip_path)
+
     except Exception as e:
         print(f"    ⚠ XBRLパース失敗 ({ticker}): {e}")
         return None
-
 
 # DB追加・更新 (UPSERT)
 def upsert_financial_data(data):
