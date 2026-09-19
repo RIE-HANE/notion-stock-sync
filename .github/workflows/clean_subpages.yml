@@ -1,0 +1,38 @@
+name: Clean Notion Blocks & Subpages
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_type:
+        description: '削除する対象を選択してください'
+        required: true
+        default: 'SUBPAGES_ONLY'
+        type: choice
+        options:
+          - 'SUBPAGES_ONLY'       # サブページ(📊 CF比較...)のみ削除
+          - 'DIRECT_BLOCKS_ONLY'  # 直貼りテキスト(▼ 競合比較...)・画像のみ削除
+          - 'ALL'                 # サブページと直貼りブロックの両方を全削除
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests notion-client
+
+      - name: Run Clean Script
+        env:
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          TARGET_TYPE: ${{ inputs.target_type }}
+        run: python clean_notion_items.py
