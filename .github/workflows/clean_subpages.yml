@@ -1,17 +1,17 @@
-name: Clean Notion Blocks & Subpages
+name: Clean Notion Subpages
 
 on:
   workflow_dispatch:
     inputs:
-      target_type:
-        description: '削除する対象を選択してください'
+      target_keyword:
+        description: '削除したいサブページのキーワードを選択または入力してください'
         required: true
-        default: 'SUBPAGES_ONLY'
+        default: 'CF比較'
         type: choice
         options:
-          - 'SUBPAGES_ONLY'       # サブページ(📊 CF比較...)のみ削除
-          - 'DIRECT_BLOCKS_ONLY'  # 直貼りテキスト(▼ 競合比較...)・画像のみ削除
-          - 'ALL'                 # サブページと直貼りブロックの両方を全削除
+          - 'CF比較'         # 📊 CF比較 (シャープ vs N E C) など
+          - '財務構造分析'     # 🏛 財務構造分析 (BS/PL) など
+          - 'ALL_SUBPAGES'   # すべてのサブページを対象にする場合
 
 jobs:
   clean:
@@ -28,11 +28,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests notion-client
+          pip install requests
 
       - name: Run Clean Script
         env:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
-          TARGET_TYPE: ${{ inputs.target_type }}
+          TARGET_KEYWORD: ${{ inputs.target_keyword }}
         run: python clean_notion_items.py
