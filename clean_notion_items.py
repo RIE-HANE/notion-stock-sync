@@ -3,6 +3,8 @@ import requests
 
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
+
+# 削除対象キーワード
 TARGET_KEYWORD = os.environ.get("TARGET_KEYWORD", "CF比較")
 
 HEADERS = {
@@ -13,6 +15,7 @@ HEADERS = {
 
 
 def get_all_pages():
+    """データベース内のすべての企業ページIDを漏れなく取得"""
     url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
     pages = []
     has_more = True
@@ -38,68 +41,83 @@ def get_all_pages():
     return pages
 
 
-def scan_and_clean_page(page_id, company_name):
+def is_target_title(text):
+    """判定ロジック（全角半角・大文字小文字対応）"""
+    if not text:
+        return False
+    if TARGET_KEYWORD == "ALL_SUBPAGES":
+        return True
+
+    normalized_text = (
+        text.replace("ＣＦ", "CF").replace("ｃｆ", "cf").lower()
+    )
+    normalized_target = TARGET_KEYWORD.replace("ＣＦ", "CF").lower()
+
+    return (
+        normalized_target in normalized_text or "競合比較" in normalized_text
+    )
+
+
+def delete_item(item_id, is_child_page=False):
+    """サブページか通常のブロックかで呼び出すAPIエンドポイントを切替"""
+    if is_child_page:
+        # サブページの場合は /v1/pages エンドポイントを使用
+        url = f"https://api.notion.com/v1/pages/{item_id}"
+    else:
+        # 通常ブロックの場合は /v1/blocks エンドポイントを使用
+        url = f"https://api.notion.com/v1/blocks/{item_id}"
+
+    res = requests.patch(url, headers=HEADERS, json={"archived": True})
+    return res.status_code == 200
+
+
+def clean_page_items(page_id, company_name):
+    """ページ内のブロックを走査して対象アイテムをアーカイブ"""
     url = f"https://api.notion.com/v1/blocks/{page_id}/children?page_size=100"
     res = requests.get(url, headers=HEADERS)
     if res.status_code != 200:
-        print(f"[{company_name}] ブロック取得失敗: {res.text}")
         return
 
     blocks = res.json().get("results", [])
-    if not blocks:
-        return
-
-    print(f"\n▼ 企業ページ: 【{company_name}】 (ブロック数: {len(blocks)})")
+    deleted_count = 0
 
     for block in blocks:
         block_id = block["id"]
         block_type = block.get("type")
-        title_text = ""
-
-        # 各種ブロックからテキスト抽出
-        if block_type == "child_page":
-            title_text = block.get("child_page", {}).get("title", "")
-        elif block_type == "paragraph":
-            rt = block.get("paragraph", {}).get("rich_text", [])
-            title_text = "".join([t.get("plain_text", "") for t in rt])
-        elif block_type == "link_to_page":
-            title_text = f"[ページリンク: {block.get('link_to_page')}]"
-        elif block_type == "child_database":
-            title_text = (
-                f"[DB: {block.get('child_database', {}).get('title', '')}]"
-            )
-        else:
-            title_text = f"[{block_type} ブロック]"
-
-        # ログに出力して実体を確認
-        print(f"  ・ Type: {block_type:<15} | 内容: {title_text}")
-
-        # 無条件で関連しそうなものを削除試行
         should_delete = False
-        if (
-            "CF" in title_text.upper()
-            or "比較" in title_text
-            or "競合" in title_text
-        ):
-            should_delete = True
+        is_subpage = False
 
+        # 1. サブページ (child_page)
+        if block_type == "child_page":
+            title = block.get("child_page", {}).get("title", "")
+            if is_target_title(title):
+                should_delete = True
+                is_subpage = True
+
+        # 2. 直貼りテキスト (paragraph)
+        elif block_type == "paragraph":
+            rich_text = block.get("paragraph", {}).get("rich_text", [])
+            text_content = "".join([t.get("plain_text", "") for t in rich_text])
+            if is_target_title(text_content):
+                should_delete = True
+
+        # 削除処理の実行
         if should_delete:
-            del_url = f"https://api.notion.com/v1/blocks/{block_id}"
-            del_res = requests.patch(
-                del_url, headers=HEADERS, json={"archived": True}
-            )
-            if del_res.status_code == 200:
-                print(f"    └ ➔ 【削除成功】 {title_text}")
-            else:
-                print(f"    └ ➔ 【削除失敗】 {del_res.text}")
+            if delete_item(block_id, is_child_page=is_subpage):
+                deleted_count += 1
+
+    if deleted_count > 0:
+        print(
+            f"【削除成功】{company_name}: {deleted_count}件のサブページ/ブロックを削除しました"
+        )
 
 
 def main():
     print(
-        f"--- Notionページの全ブロック詳細スキャン＆削除を開始します ---"
+        f"--- Notion上の「{TARGET_KEYWORD}」関連サブページ/ブロックを削除します ---"
     )
     pages = get_all_pages()
-    print(f"取得できた全企業ページ数: {len(pages)} 件")
+    print(f"対象企業数: {len(pages)} 件")
 
     for pid, props in pages:
         name = "不明"
@@ -108,9 +126,9 @@ def main():
                 name = v["title"][0].get("plain_text", "不明")
                 break
 
-        scan_and_clean_page(pid, name)
+        clean_page_items(pid, name)
 
-    print("\n--- スキャン・削除処理が完了しました ---")
+    print("--- 削除処理が完了しました ---")
 
 
 if __name__ == "__main__":
