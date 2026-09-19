@@ -350,7 +350,6 @@ def create_financial_chart(
         ax.text(45.5, eq_h + fl_h + cl_h / 2, "流動負債", ha="center", va="center", fontsize=9, fontweight="bold")
 
     if sales_h >= 5:
-        # 営業利益の領域と重ならない中央位置に「売上高」とだけ表示
         sales_text_y = (sales_h + op_h) / 2 if op_h >= 5 else sales_h / 2
         ax.text(77, sales_text_y, "売上高", ha="center", va="center", fontsize=9, fontweight="bold")
     if op_h >= 5:
@@ -386,14 +385,8 @@ def sync_pending_images_to_notion(tasks):
     now_ts = int(time.time())
     for task in tasks:
         subpage_id = task["subpage_id"]
-        chart_list = task["chart_list"]
+        # 古い年度から順（昇順）にソート
         chart_list = sorted(task["chart_list"], key=lambda x: x["year"])
-        
-        for item in chart_list:
-            year = item["year"]
-            rel_path = item["rel_path"]
-            
-            upload_image_to_notion_subpage(subpage_id, year, rel_path)
 
         children_blocks = []
         for item in chart_list:
