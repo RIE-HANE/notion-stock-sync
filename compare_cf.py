@@ -137,7 +137,7 @@ def fetch_cf_data_from_db(ticker):
     # 年度の古い順（過去→最新）に並び替え
     rows.reverse()
 
-    years = [f"{r[0]}年\n3月期" for r in rows] + ["5年計"]
+    years = [f"{r[0]}年" for r in rows] + ["5年計"]
 
     op_cfs = [r[1] or 0 for r in rows]
     inv_cfs = [r[2] or 0 for r in rows]
