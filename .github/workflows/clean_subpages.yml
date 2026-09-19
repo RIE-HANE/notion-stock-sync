@@ -35,5 +35,4 @@ jobs:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           TARGET_KEYWORD: ${{ inputs.target_keyword }}
-        # ↓↓↓ ここを clean_notion_items.py に修正 ↓↓↓
         run: python clean_notion_items.py
