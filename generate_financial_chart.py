@@ -386,7 +386,14 @@ def sync_pending_images_to_notion(tasks):
     now_ts = int(time.time())
     for task in tasks:
         subpage_id = task["subpage_id"]
+        chart_list = task["chart_list"]
         chart_list = sorted(task["chart_list"], key=lambda x: x["year"])
+        
+        for item in chart_list:
+            year = item["year"]
+            rel_path = item["rel_path"]
+            
+            upload_image_to_notion_subpage(subpage_id, year, rel_path)
 
         children_blocks = []
         for item in chart_list:
