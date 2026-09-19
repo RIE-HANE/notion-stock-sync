@@ -4,7 +4,7 @@ import requests
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 
-# 削除対象のキーワード（環境変数 TARGET_KEYWORD から取得。デフォルトは 'CF比較'）
+# 削除対象のキーワード（Workflowのドロップダウンから渡されます。デフォルトは 'CF比較'）
 TARGET_KEYWORD = os.environ.get("TARGET_KEYWORD", "CF比較")
 
 HEADERS = {
@@ -42,7 +42,7 @@ def get_all_pages():
 
 
 def clean_page_subpages(page_id, company_name):
-    """指定したキーワードを含むサブページ/ブロックを削除 (アーカイブ)"""
+    """指定したキーワードを含むサブページ/直貼りブロックを削除 (アーカイブ)"""
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     res = requests.get(url, headers=HEADERS)
     if res.status_code != 200:
@@ -66,10 +66,12 @@ def clean_page_subpages(page_id, company_name):
         elif block_type == "paragraph":
             rich_text = block.get("paragraph", {}).get("rich_text", [])
             text_content = "".join([t.get("plain_text", "") for t in rich_text])
-            if TARGET_KEYWORD in text_content:
+            if TARGET_KEYWORD in text_content or (
+                TARGET_KEYWORD == "CF比較" and "競合比較" in text_content
+            ):
                 should_delete = True
 
-        # 削除実行 (archived: True)
+        # 削除実行 (archived: True に更新)
         if should_delete:
             del_url = f"https://api.notion.com/v1/blocks/{block_id}"
             del_res = requests.patch(
@@ -80,7 +82,7 @@ def clean_page_subpages(page_id, company_name):
 
     if deleted_count > 0:
         print(
-            f"【削除完了】{company_name}: {deleted_count}件の対象（サブページ含む）を削除しました"
+            f"【削除完了】{company_name}: {deleted_count}件の対象（サブページ/ブロック）を削除しました"
         )
 
 
@@ -91,7 +93,7 @@ def main():
     pages = get_all_pages()
 
     for pid, props in pages:
-        # 企業名取得
+        # 企業名を取得
         name = "不明"
         for k, v in props.items():
             if v.get("type") == "title" and v.get("title"):
