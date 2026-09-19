@@ -3,7 +3,8 @@ import io
 import os
 import sqlite3
 import tempfile
-from edinet.xbrl_file import XBRLFile
+import xml.etree.ElementTree as ET
+import zipfile
 import requests
 
 today = datetime.date.today()
@@ -56,7 +57,8 @@ def is_data_exists(ticker, year):
     result = cursor.fetchone()
     conn.close()
     return result is not None
-    
+
+
 # DB内の企業の最新年度を取得する関数
 def get_latest_year_in_db(ticker):
     conn = sqlite3.connect(DB_FILE)
@@ -197,9 +199,19 @@ def fetch_edinet_data(ticker, year, retry_count=1):
         return None
 
 
-# EDINET XBRL書類のデータ解析処理 (一時ファイル経由)
+# 文字コードを安全にデコードしてテキストを読み込むヘルパー関数
+def safe_decode(raw_bytes):
+    for enc in ["utf-8", "utf-16", "cp932", "euc-jp"]:
+        try:
+            return raw_bytes.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw_bytes.decode("utf-8", errors="ignore")
+
+
+# EDINET XBRL書類のデータ解析処理 (文字コードエラー対応版)
 def parse_edinet_xbrl(doc_id, ticker, year, api_key):
-    """EDINET APIから実際の書類(zip)を取得し、XBRLから財務データを抽出"""
+    """EDINET APIから実際の書類(zip)を取得し、マルチエンコーディング対応でXBRL解析"""
     url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
     params = {"type": 1, "Subscription-Key": api_key}
 
@@ -208,69 +220,63 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
         if res.status_code != 200:
             return None
 
-        # 一時ファイルを作成して zip を保存
-        with tempfile.NamedTemporaryFile(
-            delete=False, suffix=".zip"
-        ) as tmp_file:
-            tmp_file.write(res.content)
-            tmp_zip_path = tmp_file.name
+        data_dict = {}
 
-        try:
-            # ファイルパスを指定して XBRLFile を読み込む
-            xbrl = XBRLFile(tmp_zip_path)
+        with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+            # zip内の.xbrlファイルを全検索
+            xbrl_files = [f for f in z.namelist() if f.endswith(".xbrl")]
 
-            # 各科目の抽出
-            total_assets = float(
-                xbrl.get_value("jpcrp_cor:TotalAssetsSummaryOfBusinessResults")
-                or 0.0
-            )
-            sales = float(
-                xbrl.get_value("jpcrp_cor:NetSalesSummaryOfBusinessResults")
-                or 0.0
-            )
-            op_profit = float(
-                xbrl.get_value(
-                    "jpcrp_cor:OperatingIncomeLossSummaryOfBusinessResults"
-                )
-                or 0.0
-            )
-            net_income = float(
-                xbrl.get_value(
-                    "jpcrp_cor:NetIncomeLossSummaryOfBusinessResults"
-                )
-                or 0.0
-            )
+            for xfile in xbrl_files:
+                raw_data = z.read(xfile)
+                content_str = safe_decode(raw_data)
 
-            current_assets = float(
-                xbrl.get_value("jppfs_cor:CurrentAssets") or 0.0
-            )
-            fixed_assets = float(
-                xbrl.get_value("jppfs_cor:NonCurrentAssets") or 0.0
-            )
-            current_liab = float(
-                xbrl.get_value("jppfs_cor:CurrentLiabilities") or 0.0
-            )
-            fixed_liab = float(
-                xbrl.get_value("jppfs_cor:NonCurrentLiabilities") or 0.0
-            )
-            equity = float(xbrl.get_value("jppfs_cor:NetAssets") or 0.0)
+                # XMLパース
+                try:
+                    root = ET.fromstring(content_str)
+                    for elem in root.iter():
+                        # タグ名からプレフィックス（要素名のみ）を抽出
+                        tag_name = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+                        if elem.text and elem.text.strip():
+                            # 最初に見つかった値を格納
+                            if tag_name not in data_dict:
+                                data_dict[tag_name] = elem.text.strip()
+                except Exception:
+                    continue
 
-            return {
-                "ticker": str(ticker),
-                "year": int(year),
-                "total_assets": total_assets,
-                "current_assets": current_assets,
-                "fixed_assets": fixed_assets,
-                "current_liab": current_liab,
-                "fixed_liab": fixed_liab,
-                "equity": equity,
-                "sales": sales,
-                "op_profit": op_profit,
-                "net_income": net_income,
-            }
-        finally:
-            if os.path.exists(tmp_zip_path):
-                os.remove(tmp_zip_path)
+        def get_val(key):
+            val = data_dict.get(key)
+            if val:
+                try:
+                    return float(val)
+                except ValueError:
+                    return 0.0
+            return 0.0
+
+        # 各財務科目の抽出
+        total_assets = get_val("TotalAssetsSummaryOfBusinessResults") or get_val("TotalAssets")
+        sales = get_val("NetSalesSummaryOfBusinessResults") or get_val("NetSales")
+        op_profit = get_val("OperatingIncomeLossSummaryOfBusinessResults") or get_val("OperatingIncome")
+        net_income = get_val("NetIncomeLossSummaryOfBusinessResults") or get_val("ProfitLoss")
+
+        current_assets = get_val("CurrentAssets")
+        fixed_assets = get_val("NonCurrentAssets")
+        current_liab = get_val("CurrentLiabilities")
+        fixed_liab = get_val("NonCurrentLiabilities")
+        equity = get_val("NetAssets")
+
+        return {
+            "ticker": str(ticker),
+            "year": int(year),
+            "total_assets": total_assets,
+            "current_assets": current_assets,
+            "fixed_assets": fixed_assets,
+            "current_liab": current_liab,
+            "fixed_liab": fixed_liab,
+            "equity": equity,
+            "sales": sales,
+            "op_profit": op_profit,
+            "net_income": net_income,
+        }
 
     except Exception as e:
         print(f"    ⚠ XBRLパース失敗 ({ticker}): {e}")
