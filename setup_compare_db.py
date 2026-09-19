@@ -176,22 +176,30 @@ def get_compare_targets_from_notion():
         return []
 
 
-# EDINET API から財務書類（XBRL）を検索・取得（リトライ機能付き）
+# EDINET API から財務書類（XBRL）を検索・取得（全日付自動検索・リトライ機能付き）
 def fetch_and_parse_cf(ticker, year, retry_count=1):
     api_key = os.getenv("EDINET_API_KEY")
     if not api_key:
         print("⚠ EDINET_API_KEY が設定されていません")
         return None
 
+    print(f"  -> EDINET APIで {ticker} ({year}年度) のデータを検索中...")
+
+    # 対象年度の翌年1年間の全提出日を自動検索（月・日ハードコードなし）
     target_year = year + 1
-    candidate_dates = [f"{target_year}-06-{d:02d}" for d in range(20, 31)]
+    start_date = datetime.date(target_year, 1, 1)
+    end_date = datetime.date(target_year, 12, 31)
 
     doc_id = None
+    curr_date = start_date
 
-    for target_date in candidate_dates:
+    while curr_date <= end_date:
+        date_str = curr_date.strftime("%Y-%m-%d")
+        curr_date += datetime.timedelta(days=1)
+
         url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
         params = {
-            "date": target_date,
+            "date": date_str,
             "type": 2,
             "Subscription-Key": api_key,
         }
@@ -204,16 +212,15 @@ def fetch_and_parse_cf(ticker, year, retry_count=1):
             results = res.json().get("results", [])
 
             for doc in results:
-                sec_code = str(doc.get("secCode", ""))[:4]
-                doc_type = str(doc.get("docTypeCode", ""))
+                # 120 = 有価証券報告書
+                if str(doc.get("docTypeCode")) == "120":
+                    sec_code = doc.get("secCode")
 
-                # 該当企業の有価証券報告書 (120) を検出
-                if sec_code == str(ticker).strip()[:4] and doc_type == "120":
-                    doc_id = doc.get("docID")
-                    print(
-                        f"    ✓ 書類発見 ({target_date}): docID={doc_id}"
-                    )
-                    return parse_compare_data_from_xbrl(doc_id, ticker, year, api_key)
+                    # 証券コード判定（4桁または5桁に対応）
+                    if sec_code in [f"{ticker}0", str(ticker)]:
+                        doc_id = doc.get("docID") or doc.get("docId")
+                        print(f"    ✓ 書類発見 ({date_str}): docID={doc_id}")
+                        return parse_compare_data_from_xbrl(doc_id, ticker, year, api_key)
 
         except Exception:
             continue
