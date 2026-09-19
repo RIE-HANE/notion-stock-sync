@@ -253,7 +253,7 @@ def create_two_company_cf_table_image(
 
 
 def sync_compare_images_to_notion(tasks):
-    """Notionへ比較表のサブページを作成し、その中に画像を反映"""
+    """Notionへ比較表のサブページを作成し、その中に画像のみを反映（メインページやサブページにテキストタイトルを挿入しない）"""
     now_ts = int(time.time())
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -283,22 +283,8 @@ def sync_compare_images_to_notion(tasks):
                     ]
                 }
             },
-            # サブページの中身（画像と説明）
+            # サブページの中身（画像のみを配置し、余計なテキスト挿入をカット）
             "children": [
-                {
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [
-                            {
-                                "type": "text",
-                                "text": {
-                                    "content": f"▼ キャッシュフロー推移比較表 ({task['comp_b_name']}対比)"
-                                },
-                            }
-                        ]
-                    },
-                },
                 {
                     "object": "block",
                     "type": "image",
