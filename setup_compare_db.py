@@ -251,8 +251,9 @@ def safe_decode(raw_bytes):
     return raw_bytes.decode("utf-8", errors="ignore")
 
 
-# EDINET XBRLから BS/PL/CF をまとめて解析
+# EDINET XBRL書類のデータ解析処理 (setup_db.py の成功ロジックを踏襲)
 def parse_compare_data_from_xbrl(doc_id, ticker, year, api_key):
+    """EDINET APIから実際の書類(zip)を取得し、マルチエンコーディング対応でXBRL解析"""
     url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
     params = {"type": 1, "Subscription-Key": api_key}
 
@@ -264,21 +265,21 @@ def parse_compare_data_from_xbrl(doc_id, ticker, year, api_key):
         data_dict = {}
 
         with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+            # zip内の.xbrlファイルを全検索
             xbrl_files = [f for f in z.namelist() if f.endswith(".xbrl")]
 
             for xfile in xbrl_files:
                 raw_data = z.read(xfile)
                 content_str = safe_decode(raw_data)
 
+                # XMLパース (setup_db.py と同じ方式)
                 try:
                     root = ET.fromstring(content_str)
                     for elem in root.iter():
-                        tag_name = (
-                            elem.tag.split("}")[-1]
-                            if "}" in elem.tag
-                            else elem.tag
-                        )
+                        # タグ名からプレフィックス（要素名のみ）を抽出
+                        tag_name = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
                         if elem.text and elem.text.strip():
+                            # 最初に見つかった値を格納
                             if tag_name not in data_dict:
                                 data_dict[tag_name] = elem.text.strip()
                 except Exception:
@@ -293,28 +294,39 @@ def parse_compare_data_from_xbrl(doc_id, ticker, year, api_key):
                     return 0.0
             return 0.0
 
-        # BS/PL科目の抽出
-        total_assets = get_val("TotalAssetsSummaryOfBusinessResults") or get_val("TotalAssets")
-        sales = get_val("NetSalesSummaryOfBusinessResults") or get_val("NetSales")
-        op_profit = get_val("OperatingIncomeLossSummaryOfBusinessResults") or get_val("OperatingIncome")
-        net_income = get_val("NetIncomeLossSummaryOfBusinessResults") or get_val("ProfitLoss")
+        # BS/PL科目の抽出 (setup_db.pyと同じキー)
+        total_assets = get_val("TotalAssetsSummaryOfBusinessResults") or get_val("TotalAssets") or get_val("AssetsIFRS")
+        sales = get_val("NetSalesSummaryOfBusinessResults") or get_val("NetSales") or get_val("RevenueIFRS") or get_val("Revenue")
+        op_profit = get_val("OperatingIncomeLossSummaryOfBusinessResults") or get_val("OperatingIncome") or get_val("OperatingProfitIFRS")
+        net_income = get_val("NetIncomeLossSummaryOfBusinessResults") or get_val("ProfitLoss") or get_val("ProfitLossAttributableToOwnersOfParentIFRS")
 
-        current_assets = get_val("CurrentAssets")
-        fixed_assets = get_val("NonCurrentAssets")
-        current_liab = get_val("CurrentLiabilities")
-        fixed_liab = get_val("NonCurrentLiabilities")
-        equity = get_val("NetAssets")
+        current_assets = get_val("CurrentAssets") or get_val("CurrentAssetsIFRS")
+        fixed_assets = get_val("NonCurrentAssets") or get_val("NonCurrentAssetsIFRS")
+        current_liab = get_val("CurrentLiabilities") or get_val("CurrentLiabilitiesIFRS")
+        fixed_liab = get_val("NonCurrentLiabilities") or get_val("NonCurrentLiabilitiesIFRS")
+        equity = get_val("NetAssets") or get_val("EquityIFRS") or get_val("TotalEquityIFRS")
 
-        # CF科目の抽出
-        op_cf = get_val("NetCashProvidedByUsedInOperatingActivities") or get_val(
-            "CashFlowsFromUsedInOperatingActivities"
+        # CF科目の抽出 (日本基準 + IFRS)
+        op_cf = (
+            get_val("NetCashProvidedByUsedInOperatingActivities")
+            or get_val("CashFlowsFromUsedInOperatingActivities")
+            or get_val("CashFlowsFromOperatingActivitiesIFRS")
+            or get_val("NetCashProvidedByUsedInOperatingActivitiesIFRS")
         )
-        inv_cf = get_val("NetCashProvidedByUsedInInvestingActivities") or get_val(
-            "CashFlowsFromUsedInInvestingActivities"
+        inv_cf = (
+            get_val("NetCashProvidedByUsedInInvestingActivities")
+            or get_val("CashFlowsFromUsedInInvestingActivities")
+            or get_val("CashFlowsFromInvestingActivitiesIFRS")
+            or get_val("NetCashProvidedByUsedInInvestingActivitiesIFRS")
         )
-        fin_cf = get_val("NetCashProvidedByUsedInFinancingActivities") or get_val(
-            "CashFlowsFromUsedInFinancingActivities"
+        fin_cf = (
+            get_val("NetCashProvidedByUsedInFinancingActivities")
+            or get_val("CashFlowsFromUsedInFinancingActivities")
+            or get_val("CashFlowsFromFinancingActivitiesIFRS")
+            or get_val("NetCashProvidedByUsedInFinancingActivitiesIFRS")
         )
+
+        print(f"    └ 解析完了 ({ticker} {year}年): 営業CF={op_cf}, 投資CF={inv_cf}, 財務CF={fin_cf}")
 
         return {
             "ticker": str(ticker),
