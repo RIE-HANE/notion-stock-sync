@@ -18,7 +18,7 @@ else:
 DB_FILE = "financial_data.db"
 
 
-# データベース初期化（CF用カラムの追加補正含む）
+# データベース初期化
 def init_compare_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -60,7 +60,7 @@ def init_compare_db():
     conn.close()
 
 
-# 指定企業・年度のCFデータがすでにDBにあるか確認する関数
+# 指定企業・年度のデータがすでにDBにあるか確認する関数
 def is_cf_exists(ticker, year):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -91,7 +91,24 @@ def get_latest_year_in_db(ticker):
     return result[0] if result and result[0] is not None else None
 
 
-# Notionから比較対象（「比較」等のフラグがついた企業）を取得
+# ページIDから企業の証券コードを取得するヘルパー関数
+def get_ticker_by_page_id(page_id, headers):
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    res = requests.get(url, headers=headers)
+    if res.status_code != 200:
+        return None
+
+    props = res.json().get("properties", {})
+    for k, v in props.items():
+        if any(key in k.lower() for key in ["コード", "ticker", "code", "証券"]):
+            if v.get("type") == "rich_text" and v.get("rich_text"):
+                return v["rich_text"][0].get("plain_text", "").strip()
+            elif v.get("type") == "number":
+                return str(v.get("number")).strip()
+    return None
+
+
+# Notionから比較対象（Relation欄に設定がある企業＆相手企業）を取得
 def get_compare_targets_from_notion():
     notion_key = os.getenv("NOTION_API_KEY")
     db_id = os.getenv("NOTION_DATABASE_ID")
@@ -107,8 +124,15 @@ def get_compare_targets_from_notion():
     }
     url = f"https://api.notion.com/v1/databases/{db_id}/query"
 
+    payload = {
+        "filter": {
+            "property": "比較",
+            "relation": {"is_not_empty": True},
+        }
+    }
+
     try:
-        response = requests.post(url, headers=headers)
+        response = requests.post(url, headers=headers, json=payload)
         if response.status_code != 200:
             print(
                 f"Notion API エラー ({response.status_code}): {response.text}"
@@ -121,32 +145,30 @@ def get_compare_targets_from_notion():
         for row in data.get("results", []):
             props = row.get("properties", {})
             ticker = None
-            is_compare_target = False
 
-            for prop_name, prop_val in props.items():
-                p_type = prop_val.get("type")
-
-                # 証券コード取得
+            # 1. 自社の証券コードを取得
+            for k, v in props.items():
                 if any(
-                    k in prop_name.lower()
-                    for k in ["コード", "ticker", "code", "証券"]
+                    key in k.lower() for key in ["コード", "ticker", "code", "証券"]
                 ):
-                    if p_type == "rich_text":
-                        txt_arr = prop_val.get("rich_text", [])
-                        if txt_arr:
-                            ticker = txt_arr[0].get("plain_text", "")
-                    elif p_type == "number":
-                        ticker = str(prop_val.get("number"))
+                    if v.get("type") == "rich_text" and v.get("rich_text"):
+                        ticker = v["rich_text"][0].get("plain_text")
+                    elif v.get("type") == "number":
+                        ticker = str(v.get("number"))
 
-                # 比較フラグ判定（列名に「比較」が含まれるチェックボックス）
-                if p_type == "checkbox" and "比較" in prop_name:
-                    is_compare_target = prop_val.get("checkbox", False)
-
-            if ticker and is_compare_target:
+            if ticker:
                 target_tickers.add(ticker.strip())
 
+            # 2. リレーション（比較対象）企業の証券コードも取得
+            relation_list = props.get("比較", {}).get("relation", [])
+            if relation_list:
+                target_page_id = relation_list[0]["id"]
+                target_ticker = get_ticker_by_page_id(target_page_id, headers)
+                if target_ticker:
+                    target_tickers.add(target_ticker)
+
         tickers_list = list(target_tickers)
-        print(f"✅ Notionから取得した比較対象企業数: {len(tickers_list)}件")
+        print(f"✅ Notionから取得した比較対象企業数: {len(tickers_list)}件 (銘柄: {', '.join(tickers_list)})")
         return tickers_list
 
     except Exception as e:
@@ -191,7 +213,7 @@ def fetch_and_parse_cf(ticker, year, retry_count=1):
                     print(
                         f"    ✓ 書類発見 ({target_date}): docID={doc_id}"
                     )
-                    return parse_cf_from_xbrl(doc_id, ticker, year, api_key)
+                    return parse_compare_data_from_xbrl(doc_id, ticker, year, api_key)
 
         except Exception:
             continue
@@ -222,7 +244,6 @@ def safe_decode(raw_bytes):
     return raw_bytes.decode("utf-8", errors="ignore")
 
 
-# EDINET XBRLからCF(キャッシュフロー)項目を解析
 # EDINET XBRLから BS/PL/CF をまとめて解析
 def parse_compare_data_from_xbrl(doc_id, ticker, year, api_key):
     url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
@@ -265,7 +286,7 @@ def parse_compare_data_from_xbrl(doc_id, ticker, year, api_key):
                     return 0.0
             return 0.0
 
-        # BS/PL科目の抽出（過去分の新規レコード作成に備えて取得！）
+        # BS/PL科目の抽出
         total_assets = get_val("TotalAssetsSummaryOfBusinessResults") or get_val("TotalAssets")
         sales = get_val("NetSalesSummaryOfBusinessResults") or get_val("NetSales")
         op_profit = get_val("OperatingIncomeLossSummaryOfBusinessResults") or get_val("OperatingIncome")
@@ -369,10 +390,7 @@ def sync_compare_data():
         return
 
     for ticker in tickers:
-        # DB内の最新年を取得。なければ動的算出の BASE_YEAR を使用
         latest_year = get_latest_year_in_db(ticker) or BASE_YEAR
-
-        # 最新年を基準に過去5年分（例: 2020〜2024年）を算出
         years_5 = [latest_year - i for i in range(5)]
         years_5.reverse()
 
@@ -385,11 +403,11 @@ def sync_compare_data():
                 print(f"  └ 【スキップ】 {yr}年（すでにCFデータが存在します）")
                 continue
 
-            print(f"  └ 【取得中】 {yr}年 CFデータを検索...")
+            print(f"  └ 【取得中】 {yr}年 データを検索...")
             cf_data = fetch_and_parse_cf(ticker, yr)
             if cf_data:
-                save_cf_to_db(cf_data)
-                print(f"  └ 【保存完了】 {yr}年 CFデータ")
+                save_compare_data_to_db(cf_data)
+                print(f"  └ 【保存完了】 {yr}年 データ")
             else:
                 print(f"  └ 【取得失敗】 {yr}年（データが見つかりませんでした）")
 
