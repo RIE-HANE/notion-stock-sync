@@ -1,11 +1,8 @@
 name: Generate Financial Chart & Sync
 
 on:
-  workflow_dispatch: # ボタン1クリックで手動実行
-  
-  # 自動定期実行の設定
+  workflow_dispatch:
   schedule:
-    # 毎日 UTC 00:00 (=日本時間 AM 9:00) に実行
     - cron: '0 0 * * *'
 
 jobs:
