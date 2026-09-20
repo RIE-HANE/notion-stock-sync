@@ -4,6 +4,9 @@ on:
   repository_dispatch:
     types: [trigger_sync]
   workflow_dispatch:
+  schedule:
+    # 毎日 日本時間 06:00 (= 前日 UTC 21:00)
+    - cron: '0 21 * * *'
 
 jobs:
   sync:
