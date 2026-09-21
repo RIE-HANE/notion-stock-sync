@@ -48,8 +48,8 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add images/
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update comparison DB and table images [skip ci]" && git push)
+          git add images/ *.db
+          git diff --quiet && git diff --staged --quiet || git commit -m "Update comparison DB and table images [skip ci]"
           git pull --rebase origin main
           git push
 
