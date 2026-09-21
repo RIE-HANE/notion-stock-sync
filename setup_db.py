@@ -1,3 +1,4 @@
+import calendar
 import datetime
 import io
 import os
@@ -5,7 +6,6 @@ import sqlite3
 import xml.etree.ElementTree as ET
 import zipfile
 import requests
-import calendar
 
 today = datetime.date.today()
 TODAY_STR = today.strftime("%Y-%m-%d")
@@ -140,6 +140,16 @@ def get_notion_companies():
         return []
 
 
+# 文字列エンコーディング対応用ヘルパー関数（追記）
+def safe_decode(raw_bytes):
+    for enc in ["utf-8", "shift_jis", "cp932", "euc-jp"]:
+        try:
+            return raw_bytes.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw_bytes.decode("utf-8", errors="ignore")
+
+
 # EDINET API から財務データを検索・取得
 def fetch_edinet_data(ticker, year, retry_count=1):
     api_key = os.getenv("EDINET_API_KEY")
@@ -199,12 +209,12 @@ def fetch_edinet_data(ticker, year, retry_count=1):
                                 flush=True,
                             )
 
-                            # 見つけたら即座に解析して終了
-                            return parse_compare_data_from_xbrl(
+                            # 関数名の修正: parse_compare_data_from_xbrl -> parse_edinet_xbrl
+                            return parse_edinet_xbrl(
                                 doc_id, ticker, year, api_key
                             )
 
-            except Exception as e:
+            except Exception:
                 continue
 
     # 見つからなかった場合のみ1年引いて再検索
@@ -221,6 +231,7 @@ def fetch_edinet_data(ticker, year, retry_count=1):
             flush=True,
         )
         return None
+
 
 # EDINET XBRL書類のデータ解析処理 (J-GAAP / IFRS 両対応 + 連結優先版)
 def parse_edinet_xbrl(doc_id, ticker, year, api_key):
