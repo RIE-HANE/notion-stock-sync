@@ -321,7 +321,10 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
 
         # 固定負債（非流動負債）
         fixed_liab = get_val(
-            "NonCurrentLiabilitiesIFRS", "NonCurrentLiabilities"
+            "NonCurrentLiabilitiesIFRS",
+            "TotalNonCurrentLiabilitiesIFRS",
+            "NonCurrentLiabilities",
+            "TotalNonCurrentLiabilities",
         )
 
         # 純資産 / 親会社の所有者に帰属する持分(IFRS)
