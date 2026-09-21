@@ -140,7 +140,7 @@ def get_notion_companies():
         return []
 
 
-# 文字列エンコーディング対応用ヘルパー関数（追記）
+# 文字列エンコーディング対応用ヘルパー関数
 def safe_decode(raw_bytes):
     for enc in ["utf-8", "shift_jis", "cp932", "euc-jp"]:
         try:
@@ -189,7 +189,6 @@ def fetch_edinet_data(ticker, year, retry_count=1):
             }
 
             try:
-                # 【重要】timeout=10 を設定して止まるのを防止
                 res = requests.get(url, params=params, timeout=10)
                 if res.status_code != 200:
                     continue
@@ -209,7 +208,6 @@ def fetch_edinet_data(ticker, year, retry_count=1):
                                 flush=True,
                             )
 
-                            # 関数名の修正: parse_compare_data_from_xbrl -> parse_edinet_xbrl
                             return parse_edinet_xbrl(
                                 doc_id, ticker, year, api_key
                             )
@@ -233,7 +231,7 @@ def fetch_edinet_data(ticker, year, retry_count=1):
         return None
 
 
-# EDINET XBRL書類のデータ解析処理 (J-GAAP / IFRS 両対応 + 連結優先版)
+# EDINET XBRL書類のデータ解析処理 (J-GAAP / IFRS 両対応 + 連結・当期厳密抽出版)
 def parse_edinet_xbrl(doc_id, ticker, year, api_key):
     """EDINET APIから実際の書類(zip)を取得し、マルチエンコーディング対応でXBRL解析"""
     url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
@@ -258,9 +256,20 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
                 try:
                     root = ET.fromstring(content_str)
                     for elem in root.iter():
-                        # 個別財務諸表（NonConsolidated）のタグは混入防止のためスキップ
                         context = elem.attrib.get("contextRef", "")
-                        if "NonConsolidated" in context:
+
+                        # 【修正ポイント】
+                        # 1. 単体（NonConsolidated）
+                        # 2. 前期/比較データ（Prior, Comparative）
+                        # これらが含まれるタグはスキップして「当期・連結」のみを抽出
+                        if any(
+                            k in context
+                            for k in [
+                                "NonConsolidated",
+                                "Prior",
+                                "Comparative",
+                            ]
+                        ):
                             continue
 
                         # タグ名からプレフィックス（要素名のみ）を抽出
@@ -269,8 +278,9 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
                             if "}" in elem.tag
                             else elem.tag
                         )
+
                         if elem.text and elem.text.strip():
-                            # 最初に見つかった連結値を優先保存
+                            # 最初に見つかった当期連結値を保存
                             if tag_name not in data_dict:
                                 data_dict[tag_name] = elem.text.strip()
                 except Exception:
@@ -450,7 +460,9 @@ def sync_db_from_edinet():
                 upsert_financial_data(fin_data)
                 print(f"  └ 【登録/更新完了】 {fin_data['year']}年")
             else:
-                print(f"  └ 【取得失敗】 {yr}年（EDINETにデータがありません）")
+                print(
+                    f"  └ 【取得失敗】 {yr}年（EDINETにデータがありません）"
+                )
 
 
 if __name__ == "__main__":
