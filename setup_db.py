@@ -5,6 +5,7 @@ import sqlite3
 import xml.etree.ElementTree as ET
 import zipfile
 import requests
+import calendar
 
 today = datetime.date.today()
 TODAY_STR = today.strftime("%Y-%m-%d")
@@ -143,76 +144,83 @@ def get_notion_companies():
 def fetch_edinet_data(ticker, year, retry_count=1):
     api_key = os.getenv("EDINET_API_KEY")
     if not api_key:
-        print("⚠ EDINET_API_KEY が設定されていません")
+        print("⚠ EDINET_API_KEY が設定されていません", flush=True)
         return None
 
-    print(f"  -> EDINET APIで {ticker} ({year}年度) のデータを検索中...")
+    print(
+        f"  -> EDINET APIで {ticker} ({year}年度) のデータをピンポイント検索中...",
+        flush=True,
+    )
 
-    # 対象年度の翌年1年間の全提出日を自動生成
+    # 有価証券報告書・四半期報告書が提出されやすい月（3, 6, 9, 12月）
     target_year = year + 1
-    start_date = datetime.date(target_year, 1, 1)
-    end_date = datetime.date(target_year, 12, 31)
+    target_months = [3, 6, 9, 12]
 
     doc_id = None
-    curr_date = start_date
 
-    while curr_date <= end_date:
-        date_str = curr_date.strftime("%Y-%m-%d")
-        curr_date += datetime.timedelta(days=1)
+    for month in target_months:
+        # 月の最終日を取得（例: 6月なら30日、12月なら31日）
+        _, last_day = calendar.monthrange(target_year, month)
 
-        url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
-        params = {
-            "date": date_str,
-            "type": 2,
-            "Subscription-Key": api_key,
-        }
+        # 20日〜月末までの日付リストを作成
+        start_date = datetime.date(target_year, month, 20)
+        end_date = datetime.date(target_year, month, last_day)
 
-        try:
-            res = requests.get(url, params=params)
-            if res.status_code != 200:
+        curr_date = start_date
+        while curr_date <= end_date:
+            date_str = curr_date.strftime("%Y-%m-%d")
+            curr_date += datetime.timedelta(days=1)
+
+            url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
+            params = {
+                "date": date_str,
+                "type": 2,
+                "Subscription-Key": api_key,
+            }
+
+            try:
+                # 【重要】timeout=10 を設定して止まるのを防止
+                res = requests.get(url, params=params, timeout=10)
+                if res.status_code != 200:
+                    continue
+
+                results = res.json().get("results", [])
+
+                for doc in results:
+                    # 120 = 有価証券報告書
+                    if str(doc.get("docTypeCode")) == "120":
+                        sec_code = doc.get("secCode")
+
+                        # 証券コードチェック
+                        if sec_code in [f"{ticker}0", str(ticker)]:
+                            doc_id = doc.get("docID") or doc.get("docId")
+                            print(
+                                f"    ✓ 書類発見 ({date_str}): docID={doc_id}",
+                                flush=True,
+                            )
+
+                            # 見つけたら即座に解析して終了
+                            return parse_compare_data_from_xbrl(
+                                doc_id, ticker, year, api_key
+                            )
+
+            except Exception as e:
                 continue
 
-            results = res.json().get("results", [])
-
-            for doc in results:
-                # 120 = 有価証券報告書
-                if str(doc.get("docTypeCode")) == "120":
-                    sec_code = doc.get("secCode")
-
-                    # 証券コード一致チェック
-                    if sec_code in [f"{ticker}0", str(ticker)]:
-                        doc_id = doc.get("docID") or doc.get("docId")
-                        print(f"    ✓ 書類発見 ({date_str}): docID={doc_id}")
-
-                        # 発見したら即座にXBRL解析して結果を返却
-                        return parse_edinet_xbrl(doc_id, ticker, year, api_key)
-
-        except Exception:
-            continue
-
-    # 見つからなかった場合のみ1年戻してリトライ
+    # 見つからなかった場合のみ1年引いて再検索
     if not doc_id and retry_count > 0:
         print(
-            f"    ⚠ {year}年度のデータがないため、1年引いて ({year - 1}年度) 再検索します..."
+            f"    ⚠ {year}年度のデータがないため、1年引いて ({year - 1}年度) 再検索します...",
+            flush=True,
         )
         return fetch_edinet_data(ticker, year - 1, retry_count=retry_count - 1)
 
     if not doc_id:
         print(
-            f"    ⚠ {year}年度の書類が見つかりませんでした (ticker: {ticker})"
+            f"    ⚠ {year}年度の書類が見つかりませんでした (ticker: {ticker})",
+            flush=True,
         )
         return None
-
-
-# 文字コードを安全にデコードしてテキストを読み込むヘルパー関数
-def safe_decode(raw_bytes):
-    for enc in ["utf-8", "utf-16", "cp932", "euc-jp"]:
-        try:
-            return raw_bytes.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return raw_bytes.decode("utf-8", errors="ignore")
-
 
 # EDINET XBRL書類のデータ解析処理 (J-GAAP / IFRS 両対応 + 連結優先版)
 def parse_edinet_xbrl(doc_id, ticker, year, api_key):
