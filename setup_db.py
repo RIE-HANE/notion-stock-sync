@@ -2,7 +2,6 @@ import datetime
 import io
 import os
 import sqlite3
-import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 import requests
@@ -141,7 +140,6 @@ def get_notion_companies():
 
 
 # EDINET API から財務データを検索・取得
-# EDINET API から財務データを検索・取得（月・特定日のハードコードなし）
 def fetch_edinet_data(ticker, year, retry_count=1):
     api_key = os.getenv("EDINET_API_KEY")
     if not api_key:
@@ -150,7 +148,7 @@ def fetch_edinet_data(ticker, year, retry_count=1):
 
     print(f"  -> EDINET APIで {ticker} ({year}年度) のデータを検索中...")
 
-    # 対象年度の翌年1年間の全提出日を自動生成（月や日の条件・分岐指定なし）
+    # 対象年度の翌年1年間の全提出日を自動生成
     target_year = year + 1
     start_date = datetime.date(target_year, 1, 1)
     end_date = datetime.date(target_year, 12, 31)
@@ -205,6 +203,7 @@ def fetch_edinet_data(ticker, year, retry_count=1):
         )
         return None
 
+
 # 文字コードを安全にデコードしてテキストを読み込むヘルパー関数
 def safe_decode(raw_bytes):
     for enc in ["utf-8", "utf-16", "cp932", "euc-jp"]:
@@ -215,7 +214,7 @@ def safe_decode(raw_bytes):
     return raw_bytes.decode("utf-8", errors="ignore")
 
 
-# EDINET XBRL書類のデータ解析処理 (文字コードエラー対応版)
+# EDINET XBRL書類のデータ解析処理 (J-GAAP / IFRS 両対応 + 連結優先版)
 def parse_edinet_xbrl(doc_id, ticker, year, api_key):
     """EDINET APIから実際の書類(zip)を取得し、マルチエンコーディング対応でXBRL解析"""
     url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
@@ -240,35 +239,97 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
                 try:
                     root = ET.fromstring(content_str)
                     for elem in root.iter():
+                        # 個別財務諸表（NonConsolidated）のタグは混入防止のためスキップ
+                        context = elem.attrib.get("contextRef", "")
+                        if "NonConsolidated" in context:
+                            continue
+
                         # タグ名からプレフィックス（要素名のみ）を抽出
-                        tag_name = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+                        tag_name = (
+                            elem.tag.split("}")[-1]
+                            if "}" in elem.tag
+                            else elem.tag
+                        )
                         if elem.text and elem.text.strip():
-                            # 最初に見つかった値を格納
+                            # 最初に見つかった連結値を優先保存
                             if tag_name not in data_dict:
                                 data_dict[tag_name] = elem.text.strip()
                 except Exception:
                     continue
 
-        def get_val(key):
-            val = data_dict.get(key)
-            if val:
-                try:
-                    return float(val)
-                except ValueError:
-                    return 0.0
+        def get_val(*keys):
+            """指定された複数のキーを順番に探し、最初に見つかった数値を返す"""
+            for key in keys:
+                val = data_dict.get(key)
+                if val:
+                    try:
+                        return float(val)
+                    except ValueError:
+                        continue
             return 0.0
 
-        # 各財務科目の抽出
-        total_assets = get_val("TotalAssetsSummaryOfBusinessResults") or get_val("TotalAssets")
-        sales = get_val("NetSalesSummaryOfBusinessResults") or get_val("NetSales")
-        op_profit = get_val("OperatingIncomeLossSummaryOfBusinessResults") or get_val("OperatingIncome")
-        net_income = get_val("NetIncomeLossSummaryOfBusinessResults") or get_val("ProfitLoss")
+        # --- 各財務科目の抽出 (IFRS -> J-GAAP の順で優先フォールバック) ---
 
-        current_assets = get_val("CurrentAssets")
-        fixed_assets = get_val("NonCurrentAssets")
-        current_liab = get_val("CurrentLiabilities")
-        fixed_liab = get_val("NonCurrentLiabilities")
-        equity = get_val("NetAssets")
+        # 流動資産
+        current_assets = get_val("CurrentAssetsIFRS", "CurrentAssets")
+
+        # 固定資産（非流動資産）
+        fixed_assets = get_val("NonCurrentAssetsIFRS", "NonCurrentAssets")
+
+        # 総資産（サマリー -> IFRS -> J-GAAP -> 流動+固定の自前計算）
+        total_assets = (
+            get_val("TotalAssetsSummaryOfBusinessResults")
+            or get_val("AssetsIFRS", "TotalAssets", "Assets")
+            or (current_assets + fixed_assets)
+        )
+
+        # 流動負債
+        current_liab = get_val(
+            "TotalCurrentLiabilitiesIFRS",
+            "CurrentLiabilitiesIFRS",
+            "CurrentLiabilities",
+        )
+
+        # 固定負債（非流動負債）
+        fixed_liab = get_val(
+            "NonCurrentLiabilitiesIFRS", "NonCurrentLiabilities"
+        )
+
+        # 純資産 / 親会社の所有者に帰属する持分(IFRS)
+        equity = get_val(
+            "EquityAttributableToOwnersOfParentIFRS",
+            "EquityIFRS",
+            "Equity",
+            "NetAssetsSummaryOfBusinessResults",
+            "NetAssets",
+        )
+
+        # 売上高 / 収益(IFRS)
+        sales = get_val(
+            "RevenueIFRS",
+            "NetSalesSummaryOfBusinessResults",
+            "RevenueSummaryOfBusinessResults",
+            "NetSales",
+            "Revenue",
+        )
+
+        # 営業利益
+        op_profit = get_val(
+            "OperatingProfitLossIFRS",
+            "OperatingIncomeLossSummaryOfBusinessResults",
+            "OperatingProfitLossSummaryOfBusinessResults",
+            "OperatingIncome",
+            "OperatingProfit",
+        )
+
+        # 当期純利益 / 親会社株主に帰属する当期純利益
+        net_income = get_val(
+            "ProfitLossAttributableToOwnersOfParentIFRS",
+            "ProfitLossIFRS",
+            "NetIncomeLossSummaryOfBusinessResults",
+            "ProfitLossSummaryOfBusinessResults",
+            "ProfitLoss",
+        )
 
         return {
             "ticker": str(ticker),
@@ -347,10 +408,16 @@ def sync_db_from_edinet():
 
         db_latest_year = get_latest_year_in_db(ticker)
 
-        print(f"\n--- 処理中: 証券コード {ticker} (DB最新: {db_latest_year or 'なし'}) ---")
+        print(
+            f"\n--- 処理中: 証券コード {ticker} (DB最新: {db_latest_year or 'なし'}) ---"
+        )
 
         # 取得が必要な年度リストを決定
-        needed_years = [BASE_YEAR - 2, BASE_YEAR - 1, BASE_YEAR] if target_3years else [BASE_YEAR]
+        needed_years = (
+            [BASE_YEAR - 2, BASE_YEAR - 1, BASE_YEAR]
+            if target_3years
+            else [BASE_YEAR]
+        )
 
         # 各年度についてDB存在チェックを行い、不足分だけ取得
         for yr in needed_years:
@@ -365,6 +432,7 @@ def sync_db_from_edinet():
                 print(f"  └ 【登録/更新完了】 {fin_data['year']}年")
             else:
                 print(f"  └ 【取得失敗】 {yr}年（EDINETにデータがありません）")
+
 
 if __name__ == "__main__":
     print("=== DBセットアップ処理を開始します ===")
