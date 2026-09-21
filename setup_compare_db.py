@@ -46,7 +46,6 @@ def init_compare_db():
     """
     )
 
-    # 既存テーブルにCFカラムがない場合のみ自動追加
     cursor.execute("PRAGMA table_info(financial_metrics)")
     columns = [col[1] for col in cursor.fetchall()]
 
@@ -60,7 +59,6 @@ def init_compare_db():
     conn.close()
 
 
-# 指定企業・年度のデータがすでにDBにあるか確認する関数
 def is_cf_exists(ticker, year):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -76,7 +74,6 @@ def is_cf_exists(ticker, year):
     return result is not None
 
 
-# DB内の企業の最新年度を取得する関数
 def get_latest_year_in_db(ticker):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -91,7 +88,6 @@ def get_latest_year_in_db(ticker):
     return result[0] if result and result[0] is not None else None
 
 
-# ページIDから企業の証券コードを取得するヘルパー関数
 def get_ticker_by_page_id(page_id, headers):
     url = f"https://api.notion.com/v1/pages/{page_id}"
     res = requests.get(url, headers=headers)
@@ -108,7 +104,6 @@ def get_ticker_by_page_id(page_id, headers):
     return None
 
 
-# Notionから比較対象（Relation欄に設定がある企業＆相手企業）を取得
 def get_compare_targets_from_notion():
     notion_key = os.getenv("NOTION_API_KEY")
     db_id = os.getenv("NOTION_DATABASE_ID")
@@ -146,7 +141,6 @@ def get_compare_targets_from_notion():
             props = row.get("properties", {})
             ticker = None
 
-            # 1. 自社の証券コードを取得
             for k, v in props.items():
                 if any(
                     key in k.lower() for key in ["コード", "ticker", "code", "証券"]
@@ -159,7 +153,6 @@ def get_compare_targets_from_notion():
             if ticker:
                 target_tickers.add(ticker.strip())
 
-            # 2. リレーション（比較対象）企業の証券コードも取得
             relation_list = props.get("比較", {}).get("relation", [])
             if relation_list:
                 target_page_id = relation_list[0]["id"]
@@ -176,7 +169,6 @@ def get_compare_targets_from_notion():
         return []
 
 
-# EDINET API から財務書類（XBRL）を検索・取得（全日付自動検索・リトライ機能付き）
 def fetch_and_parse_cf(ticker, year, retry_count=1):
     api_key = os.getenv("EDINET_API_KEY")
     if not api_key:
@@ -185,7 +177,6 @@ def fetch_and_parse_cf(ticker, year, retry_count=1):
 
     print(f"  -> EDINET APIで {ticker} ({year}年度) のデータを検索中...")
 
-    # 対象年度の翌年1年間の全提出日を自動検索（月・日ハードコードなし）
     target_year = year + 1
     start_date = datetime.date(target_year, 1, 1)
     end_date = datetime.date(target_year, 12, 31)
@@ -216,7 +207,6 @@ def fetch_and_parse_cf(ticker, year, retry_count=1):
                 if str(doc.get("docTypeCode")) == "120":
                     sec_code = doc.get("secCode")
 
-                    # 証券コード判定（4桁または5桁に対応）
                     if sec_code in [f"{ticker}0", str(ticker)]:
                         doc_id = doc.get("docID") or doc.get("docId")
                         print(f"    ✓ 書類発見 ({date_str}): docID={doc_id}")
@@ -225,7 +215,6 @@ def fetch_and_parse_cf(ticker, year, retry_count=1):
         except Exception:
             continue
 
-    # 1回のみリトライ（前年度で検索）
     if not doc_id and retry_count > 0:
         print(
             f"    ⚠ {year}年度のデータがないため、1年引いて ({year - 1}年度) 再検索します..."
@@ -241,7 +230,6 @@ def fetch_and_parse_cf(ticker, year, retry_count=1):
         return None
 
 
-# 文字コードを安全にデコードするヘルパー関数
 def safe_decode(raw_bytes):
     for enc in ["utf-8", "utf-16", "cp932", "euc-jp"]:
         try:
@@ -251,9 +239,8 @@ def safe_decode(raw_bytes):
     return raw_bytes.decode("utf-8", errors="ignore")
 
 
-# EDINET XBRL書類のデータ解析処理 (setup_db.py の成功ロジックを踏襲)
 def parse_compare_data_from_xbrl(doc_id, ticker, year, api_key):
-    """EDINET APIから実際の書類(zip)を取得し、マルチエンコーディング対応でXBRL解析"""
+    """EDINET APIから実際の書類(zip)を取得し、当期（CurrentYear）の正確な本表数値を抽出"""
     url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
     params = {"type": 1, "Subscription-Key": api_key}
 
@@ -262,69 +249,84 @@ def parse_compare_data_from_xbrl(doc_id, ticker, year, api_key):
         if res.status_code != 200:
             return None
 
+        # 当期（CurrentYear）本表データを優先格納する辞書
         data_dict = {}
 
         with zipfile.ZipFile(io.BytesIO(res.content)) as z:
-            # zip内の.xbrlファイルを全検索
             xbrl_files = [f for f in z.namelist() if f.endswith(".xbrl")]
 
             for xfile in xbrl_files:
                 raw_data = z.read(xfile)
                 content_str = safe_decode(raw_data)
 
-                # XMLパース (setup_db.py と同じ方式)
                 try:
                     root = ET.fromstring(content_str)
                     for elem in root.iter():
-                        # タグ名からプレフィックス（要素名のみ）を抽出
                         tag_name = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+                        
+                        # 【重要】サマリー用（経営指標等推移）タグは誤判定防止のため意図的に除外
+                        if "SummaryOfBusinessResults" in tag_name:
+                            continue
+
+                        context_ref = elem.get("contextRef", "")
+                        
+                        # 当期コンテキスト（CurrentYearDuration / CurrentYearInstant）の要素を優先取得
+                        is_current_year = "CurrentYear" in context_ref or "CurrentMember" in context_ref
+                        
                         if elem.text and elem.text.strip():
-                            # 最初に見つかった値を格納
-                            if tag_name not in data_dict:
-                                data_dict[tag_name] = elem.text.strip()
+                            val_str = elem.text.strip()
+                            
+                            # まだ未登録、または当期コンテキストのデータで上書き
+                            if tag_name not in data_dict or is_current_year:
+                                data_dict[tag_name] = val_str
                 except Exception:
                     continue
 
-        def get_val(key):
-            val = data_dict.get(key)
-            if val:
-                try:
-                    return float(val)
-                except ValueError:
-                    return 0.0
+        def get_val(key_list):
+            if isinstance(key_list, str):
+                key_list = [key_list]
+            for key in key_list:
+                val = data_dict.get(key)
+                if val:
+                    try:
+                        return float(val)
+                    except ValueError:
+                        continue
             return 0.0
 
-        # BS/PL科目の抽出 (setup_db.pyと同じキー)
-        total_assets = get_val("TotalAssetsSummaryOfBusinessResults") or get_val("TotalAssets") or get_val("AssetsIFRS")
-        sales = get_val("NetSalesSummaryOfBusinessResults") or get_val("NetSales") or get_val("RevenueIFRS") or get_val("Revenue")
-        op_profit = get_val("OperatingIncomeLossSummaryOfBusinessResults") or get_val("OperatingIncome") or get_val("OperatingProfitIFRS")
-        net_income = get_val("NetIncomeLossSummaryOfBusinessResults") or get_val("ProfitLoss") or get_val("ProfitLossAttributableToOwnersOfParentIFRS")
+        # BS/PL科目（本表用タグ優先）
+        total_assets = get_val(["TotalAssets", "AssetsIFRS"])
+        sales = get_val(["NetSales", "RevenueIFRS", "Revenue"])
+        op_profit = get_val(["OperatingIncome", "OperatingProfitIFRS"])
+        net_income = get_val(["ProfitLoss", "ProfitLossAttributableToOwnersOfParentIFRS", "NetIncome"])
 
-        current_assets = get_val("CurrentAssets") or get_val("CurrentAssetsIFRS")
-        fixed_assets = get_val("NonCurrentAssets") or get_val("NonCurrentAssetsIFRS")
-        current_liab = get_val("CurrentLiabilities") or get_val("CurrentLiabilitiesIFRS")
-        fixed_liab = get_val("NonCurrentLiabilities") or get_val("NonCurrentLiabilitiesIFRS")
-        equity = get_val("NetAssets") or get_val("EquityIFRS") or get_val("TotalEquityIFRS")
+        current_assets = get_val(["CurrentAssets", "CurrentAssetsIFRS"])
+        fixed_assets = get_val(["NonCurrentAssets", "NonCurrentAssetsIFRS"])
+        current_liab = get_val(["CurrentLiabilities", "CurrentLiabilitiesIFRS"])
+        fixed_liab = get_val(["NonCurrentLiabilities", "NonCurrentLiabilitiesIFRS"])
+        equity = get_val(["NetAssets", "EquityIFRS", "TotalEquityIFRS"])
 
-        # CF科目の抽出 (日本基準 + IFRS)
-        op_cf = (
-            get_val("NetCashProvidedByUsedInOperatingActivities")
-            or get_val("CashFlowsFromUsedInOperatingActivities")
-            or get_val("CashFlowsFromOperatingActivitiesIFRS")
-            or get_val("NetCashProvidedByUsedInOperatingActivitiesIFRS")
-        )
-        inv_cf = (
-            get_val("NetCashProvidedByUsedInInvestingActivities")
-            or get_val("CashFlowsFromUsedInInvestingActivities")
-            or get_val("CashFlowsFromInvestingActivitiesIFRS")
-            or get_val("NetCashProvidedByUsedInInvestingActivitiesIFRS")
-        )
-        fin_cf = (
-            get_val("NetCashProvidedByUsedInFinancingActivities")
-            or get_val("CashFlowsFromUsedInFinancingActivities")
-            or get_val("CashFlowsFromFinancingActivitiesIFRS")
-            or get_val("NetCashProvidedByUsedInFinancingActivitiesIFRS")
-        )
+        # CF科目（日本基準 + IFRS の本表用タグ）
+        op_cf = get_val([
+            "NetCashProvidedByUsedInOperatingActivities",
+            "CashFlowsFromOperatingActivitiesIFRS",
+            "CashFlowsFromUsedInOperatingActivitiesIFRS",
+            "NetCashProvidedByUsedInOperatingActivitiesIFRS"
+        ])
+        
+        inv_cf = get_val([
+            "NetCashProvidedByUsedInInvestingActivities",
+            "CashFlowsFromInvestingActivitiesIFRS",
+            "CashFlowsFromUsedInInvestingActivitiesIFRS",
+            "NetCashProvidedByUsedInInvestingActivitiesIFRS"
+        ])
+        
+        fin_cf = get_val([
+            "NetCashProvidedByUsedInFinancingActivities",
+            "CashFlowsFromFinancingActivitiesIFRS",
+            "CashFlowsFromUsedInFinancingActivitiesIFRS",
+            "NetCashProvidedByUsedInFinancingActivitiesIFRS"
+        ])
 
         print(f"    └ 解析完了 ({ticker} {year}年): 営業CF={op_cf}, 投資CF={inv_cf}, 財務CF={fin_cf}")
 
@@ -350,7 +352,6 @@ def parse_compare_data_from_xbrl(doc_id, ticker, year, api_key):
         return None
 
 
-# DBへ比較用データ（BS/PL/CF）を上書き・追記保存
 def save_compare_data_to_db(data):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -399,7 +400,6 @@ def save_compare_data_to_db(data):
     conn.close()
 
 
-# 比較用データ（過去5年分）を同期するメイン関数
 def sync_compare_data():
     init_compare_db()
     tickers = get_compare_targets_from_notion()
