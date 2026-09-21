@@ -50,6 +50,8 @@ jobs:
           git config --local user.name "GitHub Action"
           git add images/
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update comparison DB and table images [skip ci]" && git push)
+          git pull --rebase origin main
+          git push
 
       # Step 4: Notionへ比較画像サブページを同期
       - name: Step 4 - Sync Compare Images to Notion
