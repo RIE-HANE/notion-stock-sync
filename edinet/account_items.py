@@ -1,17 +1,36 @@
--- 1. 親テーブルの枠を作成（科目マスター）
+import sqlite3
+import os
+
+# データベースファイルの保存先フォルダを作成（存在しない場合）
+os.makedirs("db", exist_ok=True)
+
+# データベース接続
+conn = sqlite3.connect("db/financial_data.db")
+cursor = conn.cursor()
+
+# 1. 親テーブルの枠を作成（科目マスター）
+cursor.execute("""
 CREATE TABLE IF NOT EXISTS account_items (
     item_id INTEGER PRIMARY KEY AUTOINCREMENT,
     item_name TEXT NOT NULL UNIQUE
 );
+""")
 
--- 2. 子テーブル（XBRLタグ紐付け）の作成
+# 2. 子テーブルの枠を作成（XBRLタグ紐付け）
+cursor.execute("""
 CREATE TABLE IF NOT EXISTS xbrl_tag_mappings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,      -- 管理用ID（主キー・自動採番）
-    item_id INTEGER NOT NULL,                  -- 科目番号（親テーブルを参照する外部キー）
-    company_code TEXT,                         -- 証券コード（例: '6141', '6105'）
-    xbrl_tag_id TEXT NOT NULL,                 -- EDINETで使われているXBRLタグID
-    source_company TEXT,                       -- 参考・確認した企業名
-    accounting_standard TEXT,                  -- 会計基準（IFRS / J-GAAP など）
-    notes TEXT,                                -- 補足（タイポやContext情報など）
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    company_code TEXT,
+    xbrl_tag_id TEXT NOT NULL,
+    source_company TEXT,
+    accounting_standard TEXT,
+    notes TEXT,
     FOREIGN KEY (item_id) REFERENCES account_items(item_id) ON DELETE CASCADE
 );
+""")
+
+conn.commit()
+conn.close()
+
+print("Database and tables initialized successfully.")
