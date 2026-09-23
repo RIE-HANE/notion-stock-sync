@@ -16,7 +16,7 @@ if (today.month, today.day) < (6, 30):
 else:
     BASE_YEAR = today.year - 1
 
-DB_FILE = "financial_data.db"
+DB_FILE = os.path.join(os.path.dirname(__file__), "db", "financial_data.db")
 
 
 # データベースの初期化
