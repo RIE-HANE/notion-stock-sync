@@ -1,11 +1,12 @@
 import sqlite3
 import os
 
-# データベースファイルの保存先フォルダを作成（存在しない場合）
-os.makedirs("db", exist_ok=True)
+# edinet フォルダの1つ上の階層（＝リポジトリルート）にある financial_data.db を指定
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_FILE = os.path.join(BASE_DIR, "financial_data.db")
 
 # データベース接続
-conn = sqlite3.connect("db/financial_data.db")
+conn = sqlite3.connect(DB_FILE)
 cursor = conn.cursor()
 
 # 1. 親テーブルの枠を作成（科目マスター）
