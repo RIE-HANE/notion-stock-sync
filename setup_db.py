@@ -303,6 +303,7 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
                     for elem in root.iter():
                         context = elem.attrib.get("contextRef", "")
 
+                        # 個別データや前年度データの除外判定
                         if any(
                             k in context
                             for k in [
@@ -313,13 +314,16 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
                         ):
                             continue
 
-                        tag_name = (
+                        # 【修正箇所1】namespace（{}）と接頭辞（jppfs_cor:など）の両方を綺麗に除去
+                        raw_tag = (
                             elem.tag.split("}")[-1]
                             if "}" in elem.tag
                             else elem.tag
                         )
+                        tag_name = raw_tag.split(":")[-1]  # コロン区切りも除去
 
                         if elem.text and elem.text.strip():
+                            # 未登録、または数値としてパースできる新しい値を優先格納
                             if tag_name not in data_dict:
                                 data_dict[tag_name] = elem.text.strip()
                 except Exception:
@@ -344,6 +348,10 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
             or (current_assets + fixed_assets)
         )
 
+        # 【修正箇所2】固定資産が0で総資産と流動資産がある場合は引き算で自動補完
+        if fixed_assets == 0.0 and total_assets > current_assets:
+            fixed_assets = total_assets - current_assets
+
         current_liab = get_val(
             "TotalCurrentLiabilitiesIFRS",
             "CurrentLiabilitiesIFRS",
@@ -365,8 +373,16 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
             "NonCurrentLiabilities",
         )
 
-        if fixed_liab == 0.0 and total_assets > 0 and current_liab > 0 and equity > 0:
-            fixed_liab = total_assets - current_liab - equity
+        # 固定負債の補完計算
+        if (
+            fixed_liab == 0.0
+            and total_assets > 0
+            and current_liab > 0
+            and equity > 0
+        ):
+            calc_fl = total_assets - current_liab - equity
+            if calc_fl > 0:
+                fixed_liab = calc_fl
 
         sales = get_val(
             "RevenueIFRS",
@@ -407,9 +423,8 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
         }
 
     except Exception as e:
-        print(f"     ⚠ XBRLパース失敗 ({ticker}): {e}")
+        print(f"      ⚠ XBRLパース失敗 ({ticker}): {e}")
         return None
-
 
 def upsert_financial_data(data):
     conn = sqlite3.connect(DB_FILE)
