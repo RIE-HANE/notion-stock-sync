@@ -30,7 +30,27 @@ CREATE TABLE IF NOT EXISTS xbrl_tag_mappings (
 );
 """)
 
+# 3. 親テーブル（account_items）に基本科目を登録
+# (既に存在する場合はスキップされるように INSERT OR IGNORE を使用)
+initial_items = [
+    (1, '流動資産'),
+    (2, '固定資産'),
+    (3, '流動負債'),
+    (4, '固定負債'),
+    (5, '売上高'),
+    (6, '純資産'),
+    (7, '当期純利益'),
+    (8, '総資産'),
+    (9, '営業CF'),
+    (10, '投資CF'),
+    (11, '財務CF')
+]
+
+cursor.executemany("""
+INSERT OR IGNORE INTO account_items (item_id, item_name) VALUES (?, ?);
+""", initial_items)
+
 conn.commit()
 conn.close()
 
-print("Database and tables initialized successfully.")
+print("Database and parent table items initialized successfully.")
