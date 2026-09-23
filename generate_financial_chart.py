@@ -168,10 +168,11 @@ def is_data_created_today(ticker, year):
 
     cursor.execute(
         """
-        SELECT 1 FROM financial_metrics 
-        WHERE ticker = ? AND year = ? AND created_at = ?
+        SELECT total_assets, current_assets, fixed_assets, current_liab, fixed_liab, equity, sales, op_profit, net_income
+        FROM financial_metrics
+        WHERE ticker = ? AND year = ? AND del_flg = 0
     """,
-        (str(ticker).strip(), int(year), TODAY_STR),
+        (str(ticker), int(year)),
     )
 
     row = cursor.fetchone()
