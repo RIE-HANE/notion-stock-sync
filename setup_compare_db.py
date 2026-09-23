@@ -15,7 +15,9 @@ if (today.month, today.day) < (6, 30):
 else:
     BASE_YEAR = today.year - 1
 
-DB_FILE = "financial_data.db"
+# 【修正1】実行ディレクトリの違いによるDB不整合を防ぐ絶対パス指定
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_FILE = os.path.join(BASE_DIR, "financial_data.db")
 
 
 # データベース初期化
@@ -143,7 +145,8 @@ def get_compare_targets_from_notion():
 
             for k, v in props.items():
                 if any(
-                    key in k.lower() for key in ["コード", "ticker", "code", "証券"]
+                    key in k.lower()
+                    for key in ["コード", "ticker", "code", "証券"]
                 ):
                     if v.get("type") == "rich_text" and v.get("rich_text"):
                         ticker = v["rich_text"][0].get("plain_text")
@@ -161,7 +164,10 @@ def get_compare_targets_from_notion():
                     target_tickers.add(target_ticker)
 
         tickers_list = list(target_tickers)
-        print(f"✅ Notionから取得した比較対象企業数: {len(tickers_list)}件 (銘柄: {', '.join(tickers_list)})")
+        print(
+            f"✅ Notionから取得した比較対象企業数: {len(tickers_list)}件 (銘柄:"
+            f" {', '.join(tickers_list)})"
+        )
         return tickers_list
 
     except Exception as e:
@@ -210,14 +216,17 @@ def fetch_and_parse_cf(ticker, year, retry_count=1):
                     if sec_code in [f"{ticker}0", str(ticker)]:
                         doc_id = doc.get("docID") or doc.get("docId")
                         print(f"    ✓ 書類発見 ({date_str}): docID={doc_id}")
-                        return parse_compare_data_from_xbrl(doc_id, ticker, year, api_key)
+                        return parse_compare_data_from_xbrl(
+                            doc_id, ticker, year, api_key
+                        )
 
         except Exception:
             continue
 
     if not doc_id and retry_count > 0:
         print(
-            f"    ⚠ {year}年度のデータがないため、1年引いて ({year - 1}年度) 再検索します..."
+            f"    ⚠ {year}年度のデータがないため、1年引いて ({year - 1}年度)"
+            " 再検索します..."
         )
         return fetch_and_parse_cf(
             ticker, year - 1, retry_count=retry_count - 1
@@ -262,20 +271,29 @@ def parse_compare_data_from_xbrl(doc_id, ticker, year, api_key):
                 try:
                     root = ET.fromstring(content_str)
                     for elem in root.iter():
-                        tag_name = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-                        
-                        # 【重要】サマリー用（経営指標等推移）タグは誤判定防止のため意図的に除外
+                        # 【修正2】接頭辞（jppfs_cor:等）と namespace（{}）を除去
+                        raw_tag = (
+                            elem.tag.split("}")[-1]
+                            if "}" in elem.tag
+                            else elem.tag
+                        )
+                        tag_name = raw_tag.split(":")[-1]
+
+                        # サマリー用（経営指標等推移）タグは誤判定防止のため意図的に除外
                         if "SummaryOfBusinessResults" in tag_name:
                             continue
 
                         context_ref = elem.get("contextRef", "")
-                        
+
                         # 当期コンテキスト（CurrentYearDuration / CurrentYearInstant）の要素を優先取得
-                        is_current_year = "CurrentYear" in context_ref or "CurrentMember" in context_ref
-                        
+                        is_current_year = (
+                            "CurrentYear" in context_ref
+                            or "CurrentMember" in context_ref
+                        )
+
                         if elem.text and elem.text.strip():
                             val_str = elem.text.strip()
-                            
+
                             # まだ未登録、または当期コンテキストのデータで上書き
                             if tag_name not in data_dict or is_current_year:
                                 data_dict[tag_name] = val_str
@@ -298,37 +316,52 @@ def parse_compare_data_from_xbrl(doc_id, ticker, year, api_key):
         total_assets = get_val(["TotalAssets", "AssetsIFRS"])
         sales = get_val(["NetSales", "RevenueIFRS", "Revenue"])
         op_profit = get_val(["OperatingIncome", "OperatingProfitIFRS"])
-        net_income = get_val(["ProfitLoss", "ProfitLossAttributableToOwnersOfParentIFRS", "NetIncome"])
+        net_income = get_val(
+            [
+                "ProfitLoss",
+                "ProfitLossAttributableToOwnersOfParentIFRS",
+                "NetIncome",
+            ]
+        )
 
         current_assets = get_val(["CurrentAssets", "CurrentAssetsIFRS"])
         fixed_assets = get_val(["NonCurrentAssets", "NonCurrentAssetsIFRS"])
         current_liab = get_val(["CurrentLiabilities", "CurrentLiabilitiesIFRS"])
-        fixed_liab = get_val(["NonCurrentLiabilities", "NonCurrentLiabilitiesIFRS"])
+        fixed_liab = get_val(
+            ["NonCurrentLiabilities", "NonCurrentLiabilitiesIFRS"]
+        )
         equity = get_val(["NetAssets", "EquityIFRS", "TotalEquityIFRS"])
+
+        # 【安全補完】固定資産が0で総資産と流動資産がある場合は補完
+        if fixed_assets == 0.0 and total_assets > current_assets:
+            fixed_assets = total_assets - current_assets
 
         # CF科目（日本基準 + IFRS の本表用タグ）
         op_cf = get_val([
             "NetCashProvidedByUsedInOperatingActivities",
             "CashFlowsFromOperatingActivitiesIFRS",
             "CashFlowsFromUsedInOperatingActivitiesIFRS",
-            "NetCashProvidedByUsedInOperatingActivitiesIFRS"
+            "NetCashProvidedByUsedInOperatingActivitiesIFRS",
         ])
-        
+
         inv_cf = get_val([
             "NetCashProvidedByUsedInInvestingActivities",
             "CashFlowsFromInvestingActivitiesIFRS",
             "CashFlowsFromUsedInInvestingActivitiesIFRS",
-            "NetCashProvidedByUsedInInvestingActivitiesIFRS"
+            "NetCashProvidedByUsedInInvestingActivitiesIFRS",
         ])
-        
+
         fin_cf = get_val([
             "NetCashProvidedByUsedInFinancingActivities",
             "CashFlowsFromFinancingActivitiesIFRS",
             "CashFlowsFromUsedInFinancingActivitiesIFRS",
-            "NetCashProvidedByUsedInFinancingActivitiesIFRS"
+            "NetCashProvidedByUsedInFinancingActivitiesIFRS",
         ])
 
-        print(f"    └ 解析完了 ({ticker} {year}年): 営業CF={op_cf}, 投資CF={inv_cf}, 財務CF={fin_cf}")
+        print(
+            f"    └ 解析完了 ({ticker} {year}年): 営業CF={op_cf},"
+            f" 投資CF={inv_cf}, 財務CF={fin_cf}"
+        )
 
         return {
             "ticker": str(ticker),
@@ -414,7 +447,8 @@ def sync_compare_data():
         years_5.reverse()
 
         print(
-            f"\n=== 比較用データ収集: 証券コード {ticker} (基準年: {latest_year}年) ==="
+            f"\n=== 比較用データ収集: 証券コード {ticker} (基準年:"
+            f" {latest_year}年) ==="
         )
 
         for yr in years_5:
@@ -428,7 +462,9 @@ def sync_compare_data():
                 save_compare_data_to_db(cf_data)
                 print(f"  └ 【保存完了】 {yr}年 データ")
             else:
-                print(f"  └ 【取得失敗】 {yr}年（データが見つかりませんでした）")
+                print(
+                    f"  └ 【取得失敗】 {yr}年（データが見つかりませんでした）"
+                )
 
 
 if __name__ == "__main__":
