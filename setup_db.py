@@ -15,9 +15,9 @@ if (today.month, today.day) < (6, 30):
 else:
     BASE_YEAR = today.year - 1
 
-# setup_db.py から見た db フォルダ配下の正確なパス
-DB_FILE = os.path.join(os.path.dirname(__file__), "db", "financial_data.db")
-
+# setup_db.py があるディレクトリ（＝リポジトリルート）直下の financial_data.db を指定
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_FILE = os.path.join(BASE_DIR, "financial_data.db")
 
 # データベースの初期化
 def init_db():
