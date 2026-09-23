@@ -10,23 +10,25 @@ import requests
 today = datetime.date.today()
 TODAY_STR = today.strftime("%Y-%m-%d")
 
-# 今日の日付から「提出済みの最新年度（BASE_YEAR）」を自動計算
 if (today.month, today.day) < (6, 30):
     BASE_YEAR = today.year - 2
 else:
     BASE_YEAR = today.year - 1
 
+# setup_db.py から見た db フォルダ配下の正確なパス
 DB_FILE = os.path.join(os.path.dirname(__file__), "db", "financial_data.db")
 
 
 # データベースの初期化
 def init_db():
+    os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS financial_metrics (
             ticker TEXT,
             year INTEGER,
+            fiscal_month INTEGER,
             total_assets REAL,
             current_assets REAL,
             fixed_assets REAL,
@@ -41,18 +43,24 @@ def init_db():
             PRIMARY KEY (ticker, year)
         )
     """)
-    
-    # 既存テーブルに del_flg カラムが存在しない場合は追加する（移行対策）
+
+    # 既存テーブルへのカラム追加（移行対策）
     cursor.execute("PRAGMA table_info(financial_metrics)")
     columns = [column[1] for column in cursor.fetchall()]
     if "del_flg" not in columns:
-        cursor.execute("ALTER TABLE financial_metrics ADD COLUMN del_flg INTEGER DEFAULT 0")
+        cursor.execute(
+            "ALTER TABLE financial_metrics ADD COLUMN del_flg INTEGER DEFAULT 0"
+        )
+    if "fiscal_month" not in columns:
+        cursor.execute(
+            "ALTER TABLE financial_metrics ADD COLUMN fiscal_month INTEGER"
+        )
 
     conn.commit()
     conn.close()
 
 
-# 指定した企業・年度の有効データ（del_flg = 0）がすでにDBにあるか確認する関数
+# 指定した企業・年度の有効データ（del_flg = 0）がすでにDBにあるか確認
 def is_data_exists(ticker, year):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -68,7 +76,7 @@ def is_data_exists(ticker, year):
     return result is not None
 
 
-# DB内の企業の最新年度を取得する関数（論理削除済みのものは除く）
+# DB内の企業の最新年度を取得する関数
 def get_latest_year_in_db(ticker):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -84,7 +92,7 @@ def get_latest_year_in_db(ticker):
     return result[0] if result and result[0] is not None else None
 
 
-# Notionから全対象企業と「過去データ取得フラグ」を取得
+# Notionから全対象企業・過去フラグ・決算月（入力がある場合）を取得
 def get_notion_companies():
     notion_key = os.getenv("NOTION_API_KEY")
     db_id = os.getenv("NOTION_DATABASE_ID")
@@ -115,6 +123,7 @@ def get_notion_companies():
             props = row.get("properties", {})
             ticker = None
             target_3years = False
+            fiscal_month = None
 
             for prop_name, prop_val in props.items():
                 p_type = prop_val.get("type")
@@ -131,15 +140,34 @@ def get_notion_companies():
                     elif p_type == "number":
                         ticker = str(prop_val.get("number"))
 
-                # 「過去」フラグ判定（列名に「過去」「3年」「複数年」が含まれれば対象）
+                # 「過去」フラグ判定
                 if p_type == "checkbox" and any(
                     k in prop_name for k in ["過去", "3年", "複数年"]
                 ):
                     target_3years = prop_val.get("checkbox", False)
 
+                # 決算月を取得（入力がある場合のみ）
+                if any(
+                    k in prop_name for k in ["決算", "決算月", "決算期"]
+                ):
+                    if p_type == "number":
+                        fiscal_month = prop_val.get("number")
+                    elif p_type == "select" and prop_val.get("select"):
+                        val_str = prop_val["select"].get("name", "")
+                        fiscal_month = int("".join(filter(str.isdigit, val_str)) or 0)
+                    elif p_type == "rich_text":
+                        txt_arr = prop_val.get("rich_text", [])
+                        if txt_arr:
+                            val_str = txt_arr[0].get("plain_text", "")
+                            fiscal_month = int("".join(filter(str.isdigit, val_str)) or 0)
+
             if ticker:
                 companies.append(
-                    {"ticker": ticker.strip(), "target_3years": target_3years}
+                    {
+                        "ticker": ticker.strip(),
+                        "target_3years": target_3years,
+                        "fiscal_month": fiscal_month if fiscal_month and 1 <= fiscal_month <= 12 else None,
+                    }
                 )
 
         print(f"✅ Notionから取得した企業数: {len(companies)}件")
@@ -150,7 +178,6 @@ def get_notion_companies():
         return []
 
 
-# 文字列エンコーディング対応用ヘルパー関数
 def safe_decode(raw_bytes):
     for enc in ["utf-8", "shift_jis", "cp932", "euc-jp"]:
         try:
@@ -161,28 +188,38 @@ def safe_decode(raw_bytes):
 
 
 # EDINET API から財務データを検索・取得
-def fetch_edinet_data(ticker, year, retry_count=1):
+def fetch_edinet_data(ticker, year, fiscal_month=None, retry_count=1):
     api_key = os.getenv("EDINET_API_KEY")
     if not api_key:
         print("⚠ EDINET_API_KEY が設定されていません", flush=True)
         return None
 
-    print(
-        f"   -> EDINET APIで {ticker} ({year}年度) のデータをピンポイント検索中...",
-        flush=True,
-    )
-
-    # 有価証券報告書・四半期報告書が提出されやすい月（3, 6, 9, 12月）
     target_year = year + 1
-    target_months = [3, 6, 9, 12]
+
+    # 1. Notion等に入力がある場合：特別対応
+    if fiscal_month:
+        m1 = (fiscal_month + 2) if (fiscal_month + 2) <= 12 else (fiscal_month + 2 - 12)
+        m2 = (fiscal_month + 3) if (fiscal_month + 3) <= 12 else (fiscal_month + 3 - 12)
+        target_months = [m1, m2]
+        print(
+            f"   -> EDINET APIで {ticker} ({year}年度) のデータをピンポイント検索中... (特別対応: {fiscal_month}月決算 ➔ 対象月: {target_months})",
+            flush=True,
+        )
+    # 2. 入力がない場合：従前とおり target_months = [3, 6, 9, 12]
+    else:
+        target_months = [3, 6, 9, 12]
+        print(
+            f"   -> EDINET APIで {ticker} ({year}年度) のデータをピンポイント検索中...",
+            flush=True,
+        )
 
     doc_id = None
 
     for month in target_months:
-        # 月の最終日を取得（例: 6月なら30日、12月なら31日）
+        # 月の最終日を取得 (例: 6月なら30日、12月なら31日)
         _, last_day = calendar.monthrange(target_year, month)
 
-        # 【修正】 10日〜月末までの日付リストを作成（早出し企業対策）
+        # 10日〜月末までの日付リストを作成 (早出し企業対策)
         start_date = datetime.date(target_year, month, 10)
         end_date = datetime.date(target_year, month, last_day)
 
@@ -206,11 +243,9 @@ def fetch_edinet_data(ticker, year, retry_count=1):
                 results = res.json().get("results", [])
 
                 for doc in results:
-                    # 120 = 有価証券報告書
-                    if str(doc.get("docTypeCode")) == "120":
+                    if str(doc.get("docTypeCode")) == "120":  # 有価証券報告書
                         sec_code = doc.get("secCode")
 
-                        # 証券コードチェック
                         if sec_code in [f"{ticker}0", str(ticker)]:
                             doc_id = doc.get("docID") or doc.get("docId")
                             print(
@@ -218,20 +253,24 @@ def fetch_edinet_data(ticker, year, retry_count=1):
                                 flush=True,
                             )
 
-                            return parse_edinet_xbrl(
+                            fin_data = parse_edinet_xbrl(
                                 doc_id, ticker, year, api_key
                             )
+                            if fin_data:
+                                fin_data["fiscal_month"] = fiscal_month
+                            return fin_data
 
             except Exception:
                 continue
 
-    # 見つからなかった場合のみ1年引いて再検索
     if not doc_id and retry_count > 0:
         print(
             f"     ⚠ {year}年度のデータがないため、1年引いて ({year - 1}年度) 再検索します...",
             flush=True,
         )
-        return fetch_edinet_data(ticker, year - 1, retry_count=retry_count - 1)
+        return fetch_edinet_data(
+            ticker, year - 1, fiscal_month=fiscal_month, retry_count=retry_count - 1
+        )
 
     if not doc_id:
         print(
@@ -241,9 +280,7 @@ def fetch_edinet_data(ticker, year, retry_count=1):
         return None
 
 
-# EDINET XBRL書類のデータ解析処理 (J-GAAP / IFRS 両対応 + 連結・当期厳密抽出版)
 def parse_edinet_xbrl(doc_id, ticker, year, api_key):
-    """EDINET APIから実際の書類(zip)を取得し、マルチエンコーディング対応でXBRL解析"""
     url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
     params = {"type": 1, "Subscription-Key": api_key}
 
@@ -255,20 +292,17 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
         data_dict = {}
 
         with zipfile.ZipFile(io.BytesIO(res.content)) as z:
-            # zip内の.xbrlファイルを全検索
             xbrl_files = [f for f in z.namelist() if f.endswith(".xbrl")]
 
             for xfile in xbrl_files:
                 raw_data = z.read(xfile)
                 content_str = safe_decode(raw_data)
 
-                # XMLパース
                 try:
                     root = ET.fromstring(content_str)
                     for elem in root.iter():
                         context = elem.attrib.get("contextRef", "")
 
-                        # 単体（NonConsolidated）、前期/比較データ（Prior, Comparative）をスキップ
                         if any(
                             k in context
                             for k in [
@@ -279,7 +313,6 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
                         ):
                             continue
 
-                        # タグ名からプレフィックスを抽出
                         tag_name = (
                             elem.tag.split("}")[-1]
                             if "}" in elem.tag
@@ -302,27 +335,21 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
                         continue
             return 0.0
 
-        # --- 各財務科目の抽出 
-        # 流動資産
         current_assets = get_val("CurrentAssetsIFRS", "CurrentAssets")
-        # 固定資産（非流動資産）
         fixed_assets = get_val("NonCurrentAssetsIFRS", "NonCurrentAssets")
 
-        # 総資産（サマリー -> IFRS -> J-GAAP -> 流動+固定の自前計算）
         total_assets = (
             get_val("TotalAssetsSummaryOfBusinessResults")
             or get_val("AssetsIFRS", "TotalAssets", "Assets")
             or (current_assets + fixed_assets)
         )
 
-        # 流動負債
         current_liab = get_val(
             "TotalCurrentLiabilitiesIFRS",
             "CurrentLiabilitiesIFRS",
             "CurrentLiabilities",
         )
 
-        # 純資産
         equity = get_val(
             "EquityAttributableToOwnersOfParentIFRS",
             "EquityIFRS",
@@ -331,18 +358,16 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
             "NetAssets",
         )
 
-        # 固定負債（非流動負債）
         fixed_liab = get_val(
-            "NonCurrentLabilitiesIFRS",  
+            "NonCurrentLabilitiesIFRS",
             "NonCurrentLiabilitiesIFRS",
             "TotalNonCurrentLiabilitiesIFRS",
             "NonCurrentLiabilities",
         )
 
         if fixed_liab == 0.0 and total_assets > 0 and current_liab > 0 and equity > 0:
-            fixed_liab = total_assets - current_liab - equity        
+            fixed_liab = total_assets - current_liab - equity
 
-        # 売上高 / 収益(IFRS)
         sales = get_val(
             "RevenueIFRS",
             "NetSalesSummaryOfBusinessResults",
@@ -351,7 +376,6 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
             "Revenue",
         )
 
-        # 営業利益
         op_profit = get_val(
             "OperatingProfitLossIFRS",
             "OperatingIncomeLossSummaryOfBusinessResults",
@@ -360,7 +384,6 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
             "OperatingProfit",
         )
 
-        # 当期純利益 / 親会社株主に帰属する当期純利益
         net_income = get_val(
             "ProfitLossAttributableToOwnersOfParentIFRS",
             "ProfitLossIFRS",
@@ -388,17 +411,17 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
         return None
 
 
-# DB追加・更新 (created_at, del_flg も含めて保存)
 def upsert_financial_data(data):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
         """
         INSERT INTO financial_metrics (
-            ticker, year, total_assets, current_assets, fixed_assets,
+            ticker, year, fiscal_month, total_assets, current_assets, fixed_assets,
             current_liab, fixed_liab, equity, sales, op_profit, net_income, created_at, del_flg
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         ON CONFLICT(ticker, year) DO UPDATE SET
+            fiscal_month=excluded.fiscal_month,
             total_assets=excluded.total_assets,
             current_assets=excluded.current_assets,
             fixed_assets=excluded.fixed_assets,
@@ -414,6 +437,7 @@ def upsert_financial_data(data):
         (
             data["ticker"],
             data["year"],
+            data.get("fiscal_month"),
             data["total_assets"],
             data["current_assets"],
             data["fixed_assets"],
@@ -430,7 +454,6 @@ def upsert_financial_data(data):
     conn.close()
 
 
-# メイン処理
 def sync_db_from_edinet():
     init_db()
     companies = get_notion_companies()
@@ -444,29 +467,26 @@ def sync_db_from_edinet():
     for comp in companies:
         ticker = comp["ticker"]
         target_3years = comp["target_3years"]
+        fiscal_month = comp["fiscal_month"]
 
         db_latest_year = get_latest_year_in_db(ticker)
 
         print(
-            f"\n--- 処理中: 証券コード {ticker} (DB最新: {db_latest_year or 'なし'}) ---"
+            f"\n--- 処理中: 証券コード {ticker} (DB最新: {db_latest_year or 'なし'} / 決算月指定: {fiscal_month or 'なし(通常処理)'}) ---"
         )
 
-        # 取得が必要な年度リストを決定
         needed_years = (
             [BASE_YEAR - 2, BASE_YEAR - 1, BASE_YEAR]
             if target_3years
             else [BASE_YEAR]
         )
 
-        # 各年度についてDB存在チェックを行い、不足分だけ取得
         for yr in needed_years:
-            # 1. すでにDBにデータが存在する場合はAPIを呼ばずにスキップ
             if is_data_exists(ticker, yr):
                 print(f"   └ 【スキップ】 {yr}年（すでにDBに存在します）")
                 continue
 
-            # 2. DBにない年度だけ EDINET API を呼び出し
-            fin_data = fetch_edinet_data(ticker, yr)
+            fin_data = fetch_edinet_data(ticker, yr, fiscal_month=fiscal_month)
             if fin_data:
                 upsert_financial_data(fin_data)
                 print(f"   └ 【登録/更新完了】 {fin_data['year']}年")
