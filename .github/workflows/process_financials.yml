@@ -23,7 +23,7 @@ jobs:
 
       - name: Run Financial Pipeline
         run: |
-          python scripts/edinet/account_items.py
+          python edinet/account_items.py
 
       - name: Commit and Push DB Changes
         run: |
