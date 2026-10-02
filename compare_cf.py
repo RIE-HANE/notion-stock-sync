@@ -9,7 +9,9 @@ import requests
 # 環境変数
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
-GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "RIE-HANE/notion-stock-sync")
+GITHUB_REPOSITORY = os.environ.get(
+    "GITHUB_REPOSITORY", "RIE-HANE/notion-stock-sync"
+)
 DB_FILE = "financial_data.db"
 
 
@@ -50,7 +52,9 @@ def get_notion_pages_with_relation():
         # 証券コード
         ticker = None
         for k, v in props.items():
-            if any(key in k.lower() for key in ["コード", "ticker", "code", "証券"]):
+            if any(
+                key in k.lower() for key in ["コード", "ticker", "code", "証券"]
+            ):
                 if v.get("type") == "rich_text" and v.get("rich_text"):
                     ticker = v["rich_text"][0].get("plain_text")
                 elif v.get("type") == "number":
@@ -90,7 +94,9 @@ def get_company_detail_by_id(page_id):
     for k, v in props.items():
         if v.get("type") == "title" and v.get("title"):
             name = v["title"][0].get("plain_text", "比較対象企業")
-        if any(key in k.lower() for key in ["コード", "ticker", "code", "証券"]):
+        if any(
+            key in k.lower() for key in ["コード", "ticker", "code", "証券"]
+        ):
             if v.get("type") == "rich_text" and v.get("rich_text"):
                 ticker = v["rich_text"][0].get("plain_text")
             elif v.get("type") == "number":
@@ -99,11 +105,9 @@ def get_company_detail_by_id(page_id):
     return name, ticker.strip()
 
 
-# 数値を三桁区切り＆マイナスを「△ 」記号（百万円単位）にフォーマットする関数
 def format_cf_value(val):
     if pd.isna(val) or val is None:
         return "-"
-    # 円から百万円に変換（四捨五入）
     val_m = round(val / 1_000_000)
     if val_m < 0:
         return f"△ {abs(val_m):,}"
@@ -115,7 +119,6 @@ def fetch_cf_data_from_db(ticker):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    # 過去5期分のCFデータを昇順で取得
     query = """
         SELECT year, operating_cf, investing_cf, financing_cf
         FROM financial_metrics
@@ -128,13 +131,11 @@ def fetch_cf_data_from_db(ticker):
     conn.close()
 
     if not rows:
-        # データが存在しない場合のダミー表示用
         return (
             ["----年", "----年", "----年", "----年", "----年", "5年計"],
             [["-"] * 6, ["-"] * 6, ["-"] * 6],
         )
 
-    # 年度の古い順（過去→最新）に並び替え
     rows.reverse()
 
     years = [f"{r[0]}年" for r in rows] + ["5年計"]
@@ -143,12 +144,10 @@ def fetch_cf_data_from_db(ticker):
     inv_cfs = [r[2] or 0 for r in rows]
     fin_cfs = [r[3] or 0 for r in rows]
 
-    # 5年計の計算
     sum_op = sum(op_cfs)
     sum_inv = sum(inv_cfs)
     sum_fin = sum(fin_cfs)
 
-    # 文字列（百万円・△フォーマット）に変換
     op_str = [format_cf_value(v) for v in op_cfs] + [format_cf_value(sum_op)]
     inv_str = [format_cf_value(v) for v in inv_cfs] + [format_cf_value(sum_inv)]
     fin_str = [format_cf_value(v) for v in fin_cfs] + [format_cf_value(sum_fin)]
@@ -161,11 +160,10 @@ def fetch_cf_data_from_db(ticker):
 def create_two_company_cf_table_image(
     comp_a_name, comp_b_name, years_a, cf_a, years_b, cf_b, output_path
 ):
-    """表画像を生成 (日本語フォント文字化け対策版)"""
+    """表画像を生成"""
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8.5, 5.2))
     fig.patch.set_facecolor("white")
 
-    # Linux (GitHub Actions) / Windows / Mac のいずれの環境でも対応する日本語フォントリスト
     plt.rcParams["font.sans-serif"] = [
         "Noto Sans CJK JP",
         "Noto Sans JP",
@@ -175,9 +173,7 @@ def create_two_company_cf_table_image(
         "MS Gothic",
         "sans-serif",
     ]
-    plt.rcParams["axes.unicode_minus"] = (
-        False  # マイナス記号の文字化け（豆腐化）を防止
-    )
+    plt.rcParams["axes.unicode_minus"] = False
 
     rows = ["営業CF", "投資CF", "財務CF"]
 
@@ -256,8 +252,47 @@ def create_two_company_cf_table_image(
     plt.savefig(output_path, bbox_inches="tight", dpi=200)
     plt.close()
 
+
+def find_existing_subpage(parent_page_id, target_title):
+    """親ページ配下に同じタイトルのサブページが既に存在するか検索"""
+    url = f"https://api.notion.com/v1/blocks/{parent_page_id}/children"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Notion-Version": "2022-06-28",
+    }
+    res = requests.get(url, headers=headers)
+    if res.status_code != 200:
+        return None
+
+    results = res.json().get("results", [])
+    for block in results:
+        if block.get("type") == "child_page":
+            child_title = block.get("child_page", {}).get("title", "")
+            if child_title == target_title:
+                return block["id"]  # 既存サブページのIDを返す
+    return None
+
+
+def clear_page_children(page_id):
+    """サブページ内の古い画像ブロック等を全削除（クリーンアップ）"""
+    url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Notion-Version": "2022-06-28",
+    }
+    res = requests.get(url, headers=headers)
+    if res.status_code != 200:
+        return
+
+    children = res.json().get("results", [])
+    for child in children:
+        block_id = child["id"]
+        delete_url = f"https://api.notion.com/v1/blocks/{block_id}"
+        requests.delete(delete_url, headers=headers)
+
+
 def sync_compare_images_to_notion(tasks):
-    """Notionへ比較表のサブページを作成し、その中に画像のみを反映（メインページやサブページにテキストタイトルを挿入しない）"""
+    """重複チェックを行い、既存サブページがあれば画像を差し替え、無ければ新規作成"""
     now_ts = int(time.time())
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -271,44 +306,66 @@ def sync_compare_images_to_notion(tasks):
         filename = os.path.basename(rel_path)
         raw_image_url = f"https://raw.githubusercontent.com/{GITHUB_REPOSITORY}/main/images/{filename}?v={now_ts}"
 
-        # 1. 親ページの中に「サブページ」を新規作成する
-        create_page_url = "https://api.notion.com/v1/pages"
-        subpage_payload = {
-            "parent": {"page_id": page_id},  # 親ページのID
-            "properties": {
-                "title": {
-                    "title": [
-                        {
-                            "type": "text",
-                            "text": {
-                                "content": f"📊 CF比較 ({task['comp_a_name']} vs {task['comp_b_name']})"
-                            },
-                        }
-                    ]
-                }
-            },
-            # サブページの中身（画像のみを配置し、余計なテキスト挿入をカット）
-            "children": [
-                {
-                    "object": "block",
-                    "type": "image",
-                    "image": {
-                        "type": "external",
-                        "external": {"url": raw_image_url},
-                    },
-                },
-            ],
-        }
+        page_title = f"📊 CF比較 ({task['comp_a_name']} vs {task['comp_b_name']})"
 
-        res = requests.post(
-            create_page_url, headers=headers, json=subpage_payload
-        )
-        if res.status_code == 200:
-            print(
-                f"✅ Notionにサブページを作成して画像を反映しました: {task['comp_a_name']} vs {task['comp_b_name']}"
-            )
+        # 既存サブページが存在するか検索
+        existing_subpage_id = find_existing_subpage(page_id, page_title)
+
+        if existing_subpage_id:
+            # 既存のサブページがある場合は、中身を削除して画像を再配置（上書き更新）
+            clear_page_children(existing_subpage_id)
+
+            append_url = f"https://api.notion.com/v1/blocks/{existing_subpage_id}/children"
+            append_payload = {
+                "children": [
+                    {
+                        "object": "block",
+                        "type": "image",
+                        "image": {
+                            "type": "external",
+                            "external": {"url": raw_image_url},
+                        },
+                    }
+                ]
+            }
+            res = requests.patch(append_url, headers=headers, json=append_payload)
+            if res.status_code == 200:
+                print(f"🔄 既存サブページの画像を更新しました: {page_title}")
+            else:
+                print(f"⚠ 画像更新エラー: {res.text}")
+
         else:
-            print(f"⚠ Notionサブページ作成エラー: {res.text}")
+            # サブページが無い場合のみ新規作成
+            create_page_url = "https://api.notion.com/v1/pages"
+            subpage_payload = {
+                "parent": {"page_id": page_id},
+                "properties": {
+                    "title": {
+                        "title": [
+                            {
+                                "type": "text",
+                                "text": {"content": page_title},
+                            }
+                        ]
+                    }
+                },
+                "children": [
+                    {
+                        "object": "block",
+                        "type": "image",
+                        "image": {
+                            "type": "external",
+                            "external": {"url": raw_image_url},
+                        },
+                    }
+                ],
+            }
+
+            res = requests.post(create_page_url, headers=headers, json=subpage_payload)
+            if res.status_code == 200:
+                print(f"✅ 新規サブページを作成して画像を反映しました: {page_title}")
+            else:
+                print(f"⚠ Notionサブページ作成エラー: {res.text}")
 
 
 if __name__ == "__main__":
@@ -330,14 +387,12 @@ if __name__ == "__main__":
                 f"\n--- 表画像作成: {comp_a_name} ({ticker_a})  vs  {comp_b_name} ({ticker_b}) ---"
             )
 
-            # DBから2社のCF実データを取得
             years_a, cf_a = fetch_cf_data_from_db(ticker_a)
             years_b, cf_b = fetch_cf_data_from_db(ticker_b)
 
             file_name = f"compare_{ticker_a}_vs_{ticker_b}.png"
             rel_path = f"images/{file_name}"
 
-            # 綺麗に装飾された表画像を保存
             create_two_company_cf_table_image(
                 comp_a_name,
                 comp_b_name,
