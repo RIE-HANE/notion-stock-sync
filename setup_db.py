@@ -384,30 +384,38 @@ def parse_edinet_xbrl(doc_id, ticker, year, api_key):
             if calc_fl > 0:
                 fixed_liab = calc_fl
 
+        # 売上高 / 営業収益 (IFRSタグを追加)
         sales = get_val(
+            "RevenueIFRSSummaryOfBusinessResults",
+            "OperatingRevenueIFRS",
             "RevenueIFRS",
+            "OperatingRevenue",
             "NetSalesSummaryOfBusinessResults",
             "RevenueSummaryOfBusinessResults",
             "NetSales",
             "Revenue",
         )
 
+        # 営業利益 (念のため追加)
         op_profit = get_val(
             "OperatingProfitLossIFRS",
+            "OperatingProfitIFRS",
             "OperatingIncomeLossSummaryOfBusinessResults",
             "OperatingProfitLossSummaryOfBusinessResults",
             "OperatingIncome",
             "OperatingProfit",
         )
 
+        # 当期純利益 (念のため追加)
         net_income = get_val(
             "ProfitLossAttributableToOwnersOfParentIFRS",
             "ProfitLossIFRS",
+            "ProfitLossAttributableToOwnersOfParentSummaryOfBusinessResults",
             "NetIncomeLossSummaryOfBusinessResults",
             "ProfitLossSummaryOfBusinessResults",
             "ProfitLoss",
         )
-
+        
         return {
             "ticker": str(ticker),
             "year": int(year),
