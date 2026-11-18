@@ -264,18 +264,19 @@ def main():
 
         print(f"Processing: {code}...")
 
-    try:
+        try:
             ticker = yf.Ticker(f"{code}.T")
             
+            # 履歴データから確実な現在値（直近の終値）を取得
             hist = ticker.history(period="1d")
             if not hist.empty:
                 price = float(hist["Close"].iloc[-1])
             else:
                 price = None
 
-            print(f"取得価格 ({code}): {price}") # デバッグ用に出力してみると確実です
+            print(f"取得価格 ({code}): {price}")
 
-            # ★証券コード（4桁数字）と株価をNotionへ同時に書き込み・補完
+            # 証券コード（4桁数字）と株価をNotionへ同時に書き込み
             update_notion_code_and_price(page_id, code, price)
 
             # ページの既存ブロック（本文）を取得
@@ -284,15 +285,14 @@ def main():
 
             if len(existing_blocks) <= 2:
                 print("-> テンプレートを挿入します")
-                # infoが必要な部分はそのまま残せます
                 info = ticker.info 
                 append_notebook_template(page_id, code, info)
                 print(f"Notebook template added for {code}")
             else:
                 print("-> 本文が存在するためスキップされました")
+                
         except Exception as e:
             print(f"Error processing {code}: {e}")
-
 
 if __name__ == "__main__":
     main()
