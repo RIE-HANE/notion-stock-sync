@@ -264,11 +264,18 @@ def main():
 
         print(f"Processing: {code}...")
 
-        try:
+    try:
             ticker = yf.Ticker(f"{code}.T")
-            info = ticker.info
+            
+            # --- 修正ここから：historyから確実な現在値（直近の終値）を取得する ---
+            hist = ticker.history(period="1d")
+            if not hist.empty:
+                price = float(hist["Close"].iloc[-1])
+            else:
+                price = None
+            # --- 修正ここまで ---
 
-            price = info.get("currentPrice") or info.get("regularMarketPrice")
+            print(f"取得価格 ({code}): {price}") # デバッグ用に出力してみると確実です
 
             # ★証券コード（4桁数字）と株価をNotionへ同時に書き込み・補完
             update_notion_code_and_price(page_id, code, price)
@@ -279,6 +286,8 @@ def main():
 
             if len(existing_blocks) <= 2:
                 print("-> テンプレートを挿入します")
+                # infoが必要な部分はそのまま残せます
+                info = ticker.info 
                 append_notebook_template(page_id, code, info)
                 print(f"Notebook template added for {code}")
             else:
