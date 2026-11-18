@@ -267,13 +267,11 @@ def main():
     try:
             ticker = yf.Ticker(f"{code}.T")
             
-            # --- 修正ここから：historyから確実な現在値（直近の終値）を取得する ---
             hist = ticker.history(period="1d")
             if not hist.empty:
                 price = float(hist["Close"].iloc[-1])
             else:
                 price = None
-            # --- 修正ここまで ---
 
             print(f"取得価格 ({code}): {price}") # デバッグ用に出力してみると確実です
 
