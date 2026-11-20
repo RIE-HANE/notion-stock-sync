@@ -74,7 +74,11 @@ def update_notion_code_and_price(page_id, code, price):
             "株価": {"number": price},
         }
     }
-    requests.patch(url, headers=headers, json=payload)
+    res = requests.patch(url, headers=headers, json=payload)
+    if res.status_code != 200:
+        print(f"  └ Notion更新エラー ({code}) [{res.status_code}]: {res.text}")
+    else:
+        print(f"  └ Notion更新OK ({code}): price={price}")
 
 
 def get_notion_pages():
