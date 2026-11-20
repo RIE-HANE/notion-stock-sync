@@ -82,9 +82,21 @@ def update_notion_code_and_price(page_id, code, price):
 
 
 def get_notion_pages():
-    url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
-    res = requests.post(url, headers=headers)
-    return res.json().get("results", [])
+    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+    pages = []
+    payload = {"page_size": 100}
+
+    while True:
+        res = requests.post(url, headers=headers, json=payload)
+        res.raise_for_status()
+        data = res.json()
+        pages.extend(data.get("results", []))
+
+        if not data.get("has_more"):
+            break
+        payload["start_cursor"] = data.get("next_cursor")
+
+    return pages
 
 
 def get_page_blocks(page_id):
