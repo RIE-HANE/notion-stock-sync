@@ -82,7 +82,7 @@ def update_notion_code_and_price(page_id, code, price):
 
 
 def get_notion_pages():
-    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+    url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
     pages = []
     payload = {"page_size": 100}
 
